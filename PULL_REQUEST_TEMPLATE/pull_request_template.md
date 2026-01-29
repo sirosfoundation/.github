@@ -21,6 +21,10 @@
 <!-- Bullet list of the key changes -->
 - ...
 
+## Architecture decisions
+<!-- Anything related to the design choices made to perform the changes -->
+- ...
+
 ## Screenshots / recordings (if UI changes)
 <!-- Before/after images or a short recording -->
 - ...
