@@ -7,6 +7,14 @@
 #       uses: sirosfoundation/.github/.github/workflows/sbom.yml@main
 #       with:
 #         artifact-name: myproject
+#         sign-sbom: true  # optional
+#       permissions:
+#         contents: write        # Required for release attachment
+#         id-token: write        # Required for Cosign keyless signing
+#         security-events: write # Required for SARIF upload
+#
+# Note: Action versions use major version tags (e.g., @v4) for easier maintenance.
+# For maximum supply-chain security, consider pinning to full commit SHAs.
 #
 name: Generate SBOM
 
@@ -66,10 +74,13 @@ jobs:
         id: name
         run: |
           if [[ -n "${{ inputs.artifact-name }}" ]]; then
-            echo "name=${{ inputs.artifact-name }}" >> $GITHUB_OUTPUT
+            raw_name="${{ inputs.artifact-name }}"
           else
-            echo "name=${{ github.event.repository.name }}" >> $GITHUB_OUTPUT
+            raw_name="${{ github.event.repository.name }}"
           fi
+          # Sanitize: only allow alphanumeric, dots, underscores, hyphens
+          safe_name="${raw_name//[^A-Za-z0-9._-]/-}"
+          echo "name=${safe_name}" >> "$GITHUB_OUTPUT"
 
       - name: Generate Source SBOM
         uses: anchore/sbom-action@v0
@@ -81,6 +92,7 @@ jobs:
 
       - name: Generate Container SBOM
         if: inputs.scan-image != ''
+        id: container-sbom
         uses: anchore/sbom-action@v0
         with:
           image: ${{ inputs.scan-image }}
@@ -118,7 +130,6 @@ jobs:
             ${{ steps.name.outputs.name }}-sbom.cdx.json
 
       - name: Upload SBOM artifact
-        if: steps.sbom.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.name.outputs.name }}-sbom
@@ -130,7 +141,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Attach SBOM to Release
-        if: github.event_name == 'release' && inputs.upload-to-release && steps.sbom.outcome == 'success'
+        if: startsWith(github.ref, 'refs/tags/') && inputs.upload-to-release
         uses: softprops/action-gh-release@v2
         with:
           files: |
