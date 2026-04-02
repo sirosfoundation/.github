@@ -1,0 +1,131 @@
+# Reusable SBOM Generation Workflow
+# https://github.com/sirosfoundation/.github
+#
+# Usage in your repository:
+#   jobs:
+#     sbom:
+#       uses: sirosfoundation/.github/.github/workflows/sbom.yml@main
+#       with:
+#         artifact-name: myproject
+#
+name: Generate SBOM
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: 'Name prefix for SBOM artifact (default: repo name)'
+        type: string
+        required: false
+        default: ''
+      scan-image:
+        description: 'Container image to scan (optional, for container SBOM)'
+        type: string
+        required: false
+        default: ''
+      sign-sbom:
+        description: 'Sign SBOM with Cosign (keyless)'
+        type: boolean
+        required: false
+        default: false
+      upload-to-release:
+        description: 'Attach SBOM to GitHub release (when triggered by release)'
+        type: boolean
+        required: false
+        default: true
+      require-sbom:
+        description: 'Fail workflow if SBOM generation fails (for release gating)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  id-token: write  # For Cosign keyless signing
+
+jobs:
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine artifact name
+        id: name
+        run: |
+          if [[ -n "${{ inputs.artifact-name }}" ]]; then
+            echo "name=${{ inputs.artifact-name }}" >> $GITHUB_OUTPUT
+          else
+            echo "name=${{ github.event.repository.name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Source SBOM
+        uses: anchore/sbom-action@v0
+        id: sbom
+        with:
+          format: cyclonedx-json
+          output-file: ${{ steps.name.outputs.name }}-sbom.cdx.json
+        continue-on-error: ${{ !inputs.require-sbom }}
+
+      - name: Generate Container SBOM
+        if: inputs.scan-image != ''
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ inputs.scan-image }}
+          format: cyclonedx-json
+          output-file: ${{ steps.name.outputs.name }}-container-sbom.cdx.json
+        continue-on-error: ${{ !inputs.require-sbom }}
+
+      - name: Install Cosign
+        if: inputs.sign-sbom
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign Source SBOM
+        if: inputs.sign-sbom && steps.sbom.outcome == 'success'
+        run: |
+          cosign sign-blob --yes \
+            --output-signature ${{ steps.name.outputs.name }}-sbom.cdx.json.sig \
+            --output-certificate ${{ steps.name.outputs.name }}-sbom.cdx.json.pem \
+            ${{ steps.name.outputs.name }}-sbom.cdx.json
+
+      - name: Upload SBOM artifact
+        if: steps.sbom.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.name }}-sbom
+          path: |
+            ${{ steps.name.outputs.name }}-sbom.cdx.json
+            ${{ steps.name.outputs.name }}-sbom.cdx.json.sig
+            ${{ steps.name.outputs.name }}-sbom.cdx.json.pem
+            ${{ steps.name.outputs.name }}-container-sbom.cdx.json
+          if-no-files-found: ignore
+
+      - name: Attach SBOM to Release
+        if: github.event_name == 'release' && inputs.upload-to-release && steps.sbom.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.name.outputs.name }}-sbom.cdx.json
+            ${{ steps.name.outputs.name }}-sbom.cdx.json.sig
+            ${{ steps.name.outputs.name }}-sbom.cdx.json.pem
+            ${{ steps.name.outputs.name }}-container-sbom.cdx.json
+
+      - name: SBOM Summary
+        if: always()
+        run: |
+          echo "## SBOM Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json" ]]; then
+            COMPONENTS=$(jq '.components | length' ${{ steps.name.outputs.name }}-sbom.cdx.json 2>/dev/null || echo "N/A")
+            echo "✅ **Source SBOM generated**: ${{ steps.name.outputs.name }}-sbom.cdx.json" >> $GITHUB_STEP_SUMMARY
+            echo "   - Components: $COMPONENTS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Source SBOM**: Not generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ -f "${{ steps.name.outputs.name }}-container-sbom.cdx.json" ]]; then
+            echo "✅ **Container SBOM generated**: ${{ steps.name.outputs.name }}-container-sbom.cdx.json" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json.sig" ]]; then
+            echo "✅ **Signature**: Cosign keyless" >> $GITHUB_STEP_SUMMARY
+          fi
