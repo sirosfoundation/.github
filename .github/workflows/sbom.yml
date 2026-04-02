@@ -23,6 +23,16 @@ on:
         type: string
         required: false
         default: ''
+      scan-vulnerabilities:
+        description: 'Scan SBOM for vulnerabilities using Grype'
+        type: boolean
+        required: false
+        default: true
+      fail-on-severity:
+        description: 'Fail build if vulnerabilities at this severity or higher (negligible, low, medium, high, critical)'
+        type: string
+        required: false
+        default: ''
       sign-sbom:
         description: 'Sign SBOM with Cosign (keyless)'
         type: boolean
@@ -42,6 +52,7 @@ on:
 permissions:
   contents: write
   id-token: write  # For Cosign keyless signing
+  security-events: write  # For uploading SARIF vulnerability results
 
 jobs:
   sbom:
@@ -76,6 +87,23 @@ jobs:
           format: cyclonedx-json
           output-file: ${{ steps.name.outputs.name }}-container-sbom.cdx.json
         continue-on-error: ${{ !inputs.require-sbom }}
+
+      - name: Scan SBOM for vulnerabilities
+        if: inputs.scan-vulnerabilities && steps.sbom.outcome == 'success'
+        uses: anchore/scan-action@v6
+        id: vuln-scan
+        with:
+          sbom: ${{ steps.name.outputs.name }}-sbom.cdx.json
+          fail-build: ${{ inputs.fail-on-severity != '' }}
+          severity-cutoff: ${{ inputs.fail-on-severity || 'negligible' }}
+          output-format: sarif
+          
+      - name: Upload vulnerability scan results
+        if: inputs.scan-vulnerabilities && steps.sbom.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.vuln-scan.outputs.sarif }}
+        continue-on-error: true
 
       - name: Install Cosign
         if: inputs.sign-sbom
@@ -125,6 +153,16 @@ jobs:
           fi
           if [[ -f "${{ steps.name.outputs.name }}-container-sbom.cdx.json" ]]; then
             echo "✅ **Container SBOM generated**: ${{ steps.name.outputs.name }}-container-sbom.cdx.json" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ "${{ inputs.scan-vulnerabilities }}" == "true" ]]; then
+            if [[ "${{ steps.vuln-scan.outcome }}" == "success" ]]; then
+              echo "✅ **Vulnerability scan**: Passed" >> $GITHUB_STEP_SUMMARY
+            elif [[ "${{ steps.vuln-scan.outcome }}" == "failure" ]]; then
+              echo "❌ **Vulnerability scan**: Failed (severity threshold: ${{ inputs.fail-on-severity }})" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ **Vulnerability scan**: Skipped" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "   - [View results in Security tab](../security/code-scanning)" >> $GITHUB_STEP_SUMMARY
           fi
           if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json.sig" ]]; then
             echo "✅ **Signature**: Cosign keyless" >> $GITHUB_STEP_SUMMARY
