@@ -1,0 +1,25 @@
+# Dependabot configuration for GitHub Actions updates
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+#
+# This will create PRs when pinned action versions become outdated,
+# helping maintain supply-chain security while staying current.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Group all action updates into a single PR for easier review
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    # Open PRs against main branch
+    target-branch: "main"
