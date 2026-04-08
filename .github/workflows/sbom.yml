@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Determine artifact name
         id: name
@@ -105,7 +105,7 @@ jobs:
 
       - name: Scan SBOM for vulnerabilities
         if: inputs.scan-vulnerabilities && steps.sbom.outcome == 'success'
-        uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e  # v6
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2  # v7.4.0
         id: vuln-scan
         with:
           sbom: ${{ steps.name.outputs.name }}-sbom.cdx.json
@@ -115,14 +115,14 @@ jobs:
 
       - name: Upload vulnerability scan results
         if: inputs.scan-vulnerabilities && steps.sbom.outcome == 'success'
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.vuln-scan.outputs.sarif }}
         continue-on-error: true
 
       - name: Install Cosign
         if: inputs.sign-sbom
-        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9  # v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
 
       - name: Sign Source SBOM
         if: inputs.sign-sbom && steps.sbom.outcome == 'success'
@@ -133,7 +133,7 @@ jobs:
             ${{ steps.name.outputs.name }}-sbom.cdx.json
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.name.outputs.name }}-sbom
           path: |
