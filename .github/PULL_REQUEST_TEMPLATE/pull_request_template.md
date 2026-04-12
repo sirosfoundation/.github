@@ -43,6 +43,15 @@
 - [ ] I verified backward compatibility / migration notes (if needed)
 - [ ] I added monitoring/logging (if needed)
 
+## Security checklist
+<!-- For any PR that touches code, dependencies, or configuration -->
+- [ ] No secrets, credentials, or API keys are hardcoded
+- [ ] New dependencies have been reviewed for known vulnerabilities
+- [ ] User input is validated and sanitized where applicable
+- [ ] No new attack surface introduced without security review
+- [ ] PII/sensitive data handling follows data protection policies
+- [ ] N/A — this PR does not affect code, deps, or configuration
+
 ## Notes for reviewers
 <!-- Risk areas, review order, follow-ups, rollout plan -->
 - ...
