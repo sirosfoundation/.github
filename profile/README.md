@@ -10,7 +10,7 @@ graph TB
         common[wallet-common]
         backend[go-wallet-backend]
         frontend --> common
-        backend --> common
+        backend --> frontend
     end
 
     subgraph issuance["📜 Issuance & Verification"]
@@ -26,7 +26,7 @@ graph TB
 
     subgraph registry["📋 Wallet Ecosystem"]
         reg[registry.siros.org]
-        mtcvctm[mtcvctm]
+		registry-cli
     end
 
     wallet <-->|credentials| issuance
