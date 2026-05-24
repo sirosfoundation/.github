@@ -1,0 +1,6 @@
+{
+  "name": "Conformance Tests",
+  "description": "Trigger OpenID conformance tests via @conformance PR comments. Requires CONFORMANCE_DISPATCH_TOKEN secret.",
+  "iconName": "octicon-check-circle",
+  "categories": ["continuous-integration"]
+}
