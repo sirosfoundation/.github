@@ -38,14 +38,14 @@ jobs:
             --silent
 
       - name: Checkout siros-conformance scripts
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@v4
         with:
           repository: sirosfoundation/siros-conformance
           ref: main
           sparse-checkout: scripts
           path: _conformance
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
@@ -55,33 +55,38 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           PARSED=$(echo "$COMMENT_BODY" | node _conformance/scripts/parse-comment.mjs)
-          echo "parsed=${PARSED}" >> $GITHUB_OUTPUT
           echo "Parsed: ${PARSED}"
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "parsed<<$EOF" >> $GITHUB_OUTPUT
+          echo "$PARSED" >> $GITHUB_OUTPUT
+          echo "$EOF" >> $GITHUB_OUTPUT
 
       - name: Dispatch conformance tests
         env:
           GH_TOKEN: ${{ secrets.CONFORMANCE_DISPATCH_TOKEN }}
+          PARSED: ${{ steps.parse.outputs.parsed }}
         run: |
-          PARSED='${{ steps.parse.outputs.parsed }}'
           EVENTS=$(echo "$PARSED" | jq -r '.["dispatch-events"][]')
           OVERRIDES=$(echo "$PARSED" | jq -c '.["image-overrides"]')
+          VARIANT_FILTER=$(echo "$PARSED" | jq -r '.["variant-filter"]')
           PR_NUMBER=${{ github.event.issue.number }}
           REPO=${{ github.repository }}
 
           for EVENT in $EVENTS; do
-            echo "Dispatching ${EVENT} with overrides=${OVERRIDES}"
+            echo "Dispatching ${EVENT} with overrides=${OVERRIDES} variant-filter=${VARIANT_FILTER}"
             gh api repos/sirosfoundation/siros-conformance/dispatches \
               -f event_type="${EVENT}" \
               -f "client_payload[target-repo]=${REPO}" \
               -f "client_payload[target-pr]=${PR_NUMBER}" \
-              -f "client_payload[image-overrides]=${OVERRIDES}"
+              -f "client_payload[image-overrides]=${OVERRIDES}" \
+              -f "client_payload[variant-filter]=${VARIANT_FILTER}"
           done
 
       - name: Post status comment
         env:
           GH_TOKEN: ${{ github.token }}
+          PARSED: ${{ steps.parse.outputs.parsed }}
         run: |
-          PARSED='${{ steps.parse.outputs.parsed }}'
           PROFILES=$(echo "$PARSED" | jq -r '.profiles | join(", ")')
           OVERRIDES=$(echo "$PARSED" | jq -r '
             .["image-overrides"] |
@@ -90,7 +95,13 @@ jobs:
             else map("\(.key):\(.value)") | join(", ")
             end
           ')
+          VARIANT_FILTER=$(echo "$PARSED" | jq -r '.["variant-filter"] // empty')
           RUN_URL="${{ github.server_url }}/sirosfoundation/siros-conformance/actions"
+
+          VARIANT_ROW=""
+          if [ -n "${VARIANT_FILTER}" ]; then
+            VARIANT_ROW="| **Variant filter** | ${VARIANT_FILTER} |"
+          fi
 
           BODY="🚀 **Conformance tests triggered**
 
@@ -98,6 +109,7 @@ jobs:
           |---|---|
           | **Profiles** | ${PROFILES} |
           | **Image overrides** | ${OVERRIDES} |
+          ${VARIANT_ROW}
           | **Results** | [siros-conformance actions](${RUN_URL}) |
 
           Results will be posted here when complete."
