@@ -1,0 +1,6 @@
+{
+  "name": "SBOM",
+  "description": "Generate Software Bill of Materials via the org reusable workflow",
+  "iconName": "octicon shield-check",
+  "categories": ["security"]
+}

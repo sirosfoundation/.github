@@ -93,13 +93,13 @@ jobs:
           RUN_URL="${{ github.server_url }}/sirosfoundation/siros-conformance/actions"
 
           BODY="🚀 **Conformance tests triggered**
-          
+
           | | |
           |---|---|
           | **Profiles** | ${PROFILES} |
           | **Image overrides** | ${OVERRIDES} |
           | **Results** | [siros-conformance actions](${RUN_URL}) |
-          
+
           Results will be posted here when complete."
 
           gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/comments \

@@ -1,0 +1,7 @@
+{
+  "name": "Security (Go)",
+  "description": "Go vulnerability scanning with govulncheck and dependency review",
+  "iconName": "octicon shield-lock",
+  "categories": ["Go", "security"],
+  "filePatterns": ["go.mod"]
+}

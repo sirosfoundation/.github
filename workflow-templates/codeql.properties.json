@@ -1,0 +1,7 @@
+{
+  "name": "CodeQL (Go)",
+  "description": "Semantic code analysis with GitHub CodeQL for Go repositories",
+  "iconName": "octicon codescan",
+  "categories": ["Go", "security"],
+  "filePatterns": ["go.mod"]
+}

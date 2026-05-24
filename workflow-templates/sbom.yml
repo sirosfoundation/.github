@@ -1,0 +1,22 @@
+# Generate Software Bill of Materials (SBOM) on push to main and release.
+# Calls the org-wide reusable SBOM workflow from sirosfoundation/.github.
+#
+# Adopt: Actions → New workflow → "SBOM" or copy to .github/workflows/sbom.yml
+name: SBOM
+
+on:
+  push:
+    branches: [$default-branch]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    uses: sirosfoundation/.github/.github/workflows/sbom.yml@main
+    permissions:
+      contents: write
+      packages: read
+      id-token: write
