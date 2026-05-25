@@ -1,0 +1,36 @@
+# Security scanning for Go repositories.
+# Runs govulncheck on push/PR and dependency-review on PRs.
+#
+# Adopt: Actions → New workflow → "Security (Go)" or copy to .github/workflows/security.yml
+name: Security
+
+on:
+  push:
+    branches: [$default-branch]
+  pull_request:
+    branches: [$default-branch]
+  schedule:
+    - cron: "0 0 * * 1" # Monday midnight
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sirosfoundation/.github/actions/govulncheck@main
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
