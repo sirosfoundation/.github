@@ -1,0 +1,33 @@
+name: govulncheck
+description: >
+  Run govulncheck on a Go module. Centralises the govulncheck version
+  so all repos stay on the same release.
+
+inputs:
+  go-version-file:
+    description: 'Path to go.mod (for actions/setup-go)'
+    required: false
+    default: 'go.mod'
+  govulncheck-version:
+    description: 'govulncheck version to install'
+    required: false
+    default: 'v1.1.4'
+  scan-path:
+    description: 'Package pattern to scan'
+    required: false
+    default: './...'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.go-version-file }}
+
+    - name: Install govulncheck
+      shell: bash
+      run: go install golang.org/x/vuln/cmd/govulncheck@${{ inputs.govulncheck-version }}
+
+    - name: Run govulncheck
+      shell: bash
+      run: govulncheck ${{ inputs.scan-path }}
