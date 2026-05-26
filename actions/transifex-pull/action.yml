@@ -1,0 +1,157 @@
+name: transifex-pull
+description: >
+  Pull translated files from Transifex and open a PR with the changes.
+  Installs the Transifex CLI, pulls translations, runs an optional
+  post-pull command (e.g. coverage checks), and creates/updates a PR.
+
+inputs:
+  tx-token:
+    description: 'Transifex API token (v3)'
+    required: true
+  github-token:
+    description: 'GitHub token for creating the PR (needs contents:write + pull-requests:write)'
+    required: true
+  tx-cli-version:
+    description: 'Transifex CLI version to install'
+    required: false
+    default: 'v1.6.16'
+  source-file:
+    description: 'Path to source language file (e.g. src/locales/en.json)'
+    required: true
+  tx-organization:
+    description: 'Transifex organization slug'
+    required: true
+  tx-project:
+    description: 'Transifex project slug'
+    required: true
+  tx-resource:
+    description: 'Transifex resource slug'
+    required: false
+    default: ''
+  tx-file-format:
+    description: 'Transifex file format (e.g. KEYVALUEJSON, STRUCTURED_JSON, PO)'
+    required: false
+    default: 'STRUCTURED_JSON'
+  source-lang:
+    description: 'Source language code'
+    required: false
+    default: 'en'
+  pull-mode:
+    description: 'Transifex pull mode: reviewed, translated, or proofread'
+    required: false
+    default: 'reviewed'
+  minimum-percentage:
+    description: 'Only pull languages with at least this completion percentage'
+    required: false
+    default: '10'
+  post-pull-command:
+    description: 'Optional command to run after pulling translations (e.g. npm run translations)'
+    required: false
+    default: ''
+  pr-branch:
+    description: 'Branch name for the translations PR'
+    required: false
+    default: 'chore/transifex-translations'
+  pr-base:
+    description: 'Base branch to open the PR against'
+    required: false
+    default: ''
+  pr-title:
+    description: 'PR title'
+    required: false
+    default: 'chore: update translations from Transifex'
+  pr-labels:
+    description: 'Comma-separated labels for the PR'
+    required: false
+    default: 'translations,automated'
+
+runs:
+  using: composite
+  steps:
+    - name: Install Transifex CLI
+      shell: bash
+      run: |
+        curl -fsSL "https://github.com/transifex/cli/releases/download/${{ inputs.tx-cli-version }}/tx-linux-amd64.tar.gz" \
+          | tar xz -C /usr/local/bin tx
+
+    - name: Generate .tx/config
+      shell: bash
+      env:
+        TX_ORGANIZATION: ${{ inputs.tx-organization }}
+        TX_PROJECT: ${{ inputs.tx-project }}
+        TX_RESOURCE: ${{ inputs.tx-resource }}
+        TX_FILE_FORMAT: ${{ inputs.tx-file-format }}
+        TX_SOURCE_LANG: ${{ inputs.source-lang }}
+        TX_SOURCE_FILE: ${{ inputs.source-file }}
+      run: |
+        resource="${TX_RESOURCE:-$(basename "${TX_SOURCE_FILE%.*}")}"
+        mkdir -p .tx
+        cat > .tx/config <<EOF
+        [main]
+        host = https://www.transifex.com
+
+        [o:${TX_ORGANIZATION}:p:${TX_PROJECT}:r:${resource}]
+        file_filter  = $(dirname "${TX_SOURCE_FILE}")/<lang>.json
+        source_file  = ${TX_SOURCE_FILE}
+        source_lang  = ${TX_SOURCE_LANG}
+        type         = ${TX_FILE_FORMAT}
+        EOF
+        sed -i 's/^        //' .tx/config
+        echo "--- generated .tx/config ---"
+        cat .tx/config
+
+    - name: Pull translations
+      shell: bash
+      env:
+        TX_TOKEN: ${{ inputs.tx-token }}
+      run: |
+        tx pull --all \
+          --mode ${{ inputs.pull-mode }} \
+          --minimum-perc=${{ inputs.minimum-percentage }} \
+          --force
+
+    - name: Run post-pull command
+      if: inputs.post-pull-command != ''
+      shell: bash
+      run: ${{ inputs.post-pull-command }}
+
+    - name: Create or update PR
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_BRANCH: ${{ inputs.pr-branch }}
+        PR_BASE: ${{ inputs.pr-base }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_LABELS: ${{ inputs.pr-labels }}
+      run: |
+        git config user.name  "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        # Determine base branch
+        base="${PR_BASE:-$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)}"
+
+        git checkout -B "${PR_BRANCH}"
+        git add -A
+        if git diff --cached --quiet; then
+          echo "No translation changes detected."
+          exit 0
+        fi
+
+        git commit -m "${PR_TITLE}"
+        git push --force origin "${PR_BRANCH}"
+
+        # Create or update PR
+        existing_pr=$(gh pr list --head "${PR_BRANCH}" --base "${base}" --json number -q '.[0].number' 2>/dev/null || true)
+        if [[ -n "${existing_pr}" ]]; then
+          echo "PR #${existing_pr} already exists — updated branch."
+        else
+          gh pr create \
+            --title "${PR_TITLE}" \
+            --base "${base}" \
+            --head "${PR_BRANCH}" \
+            --body "Automated translation update from Transifex.
+
+        This PR was created by the transifex-pull action.
+        Review the changes and merge when ready." \
+            --label "${PR_LABELS}" || true
+        fi
