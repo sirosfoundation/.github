@@ -11,6 +11,10 @@ inputs:
     description: 'Transifex CLI version to install'
     required: false
     default: 'v1.6.16'
+  tx-cli-sha256:
+    description: 'Expected SHA256 checksum of the TX CLI tarball'
+    required: false
+    default: '29f5a59b3820adf140f584e9e3aad1fc55a7ed06540a5131eff91259e2db8431'
   source-file:
     description: 'Path to source language file (e.g. src/locales/en.json)'
     required: true
@@ -38,9 +42,15 @@ runs:
   steps:
     - name: Install Transifex CLI
       shell: bash
+      env:
+        TX_CLI_VERSION: ${{ inputs.tx-cli-version }}
+        TX_CLI_SHA256: ${{ inputs.tx-cli-sha256 }}
       run: |
-        curl -fsSL "https://github.com/transifex/cli/releases/download/${{ inputs.tx-cli-version }}/tx-linux-amd64.tar.gz" \
-          | tar xz -C /usr/local/bin tx
+        curl -fsSL "https://github.com/transifex/cli/releases/download/${TX_CLI_VERSION}/tx-linux-amd64.tar.gz" \
+          -o /tmp/tx.tar.gz
+        echo "${TX_CLI_SHA256}  /tmp/tx.tar.gz" | sha256sum -c -
+        tar xz -C /usr/local/bin tx < /tmp/tx.tar.gz
+        rm /tmp/tx.tar.gz
 
     - name: Generate .tx/config
       shell: bash
@@ -64,8 +74,6 @@ runs:
         source_lang  = ${TX_SOURCE_LANG}
         type         = ${TX_FILE_FORMAT}
         EOF
-        # Remove leading whitespace from heredoc
-        sed -i 's/^        //' .tx/config
         echo "--- generated .tx/config ---"
         cat .tx/config
 
