@@ -4,6 +4,11 @@
 # Builds a Docker image using Buildx and pushes to GHCR.
 # Encapsulates the standard tag policy, multi-platform builds, and caching.
 #
+# Trust model:
+#   - Pushes, tags, and workflow_dispatch: always run
+#   - PRs from same repo (org members): always run
+#   - PRs from forks (external contributors): require 'safe-to-build' label
+#
 # Standard usage (Go or Node project with single Dockerfile):
 #
 #   on:
@@ -132,6 +137,12 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Trust gate: run automatically for pushes, tags, dispatches, and same-repo PRs.
+    # Fork PRs require the 'safe-to-build' label (only org members can apply it).
+    if: >-
+      !startsWith(github.ref, 'refs/pull/')
+      || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+      || contains(github.event.pull_request.labels.*.name, 'safe-to-build')
     permissions:
       contents: read
       packages: write
