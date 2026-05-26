@@ -2,5 +2,5 @@
   "name": "Docker Build & Push (GHCR)",
   "description": "Build and push Docker images to GHCR using the org reusable workflow. Supports Go and Node projects.",
   "iconName": "docker",
-  "categories": ["Docker", "CI"]
+  "categories": ["Docker", "continuous-integration"]
 }
