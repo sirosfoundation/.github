@@ -11,13 +11,17 @@ on:
   schedule:
     - cron: "0 4 * * 1" # Monday 04:00
 
-permissions: read-all
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+      actions: read
       security-events: write # Upload SARIF
       id-token: write        # Publish results
     steps:
