@@ -2,6 +2,7 @@
 # https://github.com/sirosfoundation/.github
 #
 # Builds a Docker image using Buildx and pushes to GHCR.
+# Includes Trivy CVE scanning of the built image (results in GitHub Security tab).
 # Encapsulates the standard tag policy, multi-platform builds, and caching.
 #
 # Trust model:
@@ -24,6 +25,7 @@
 #       permissions:
 #         contents: read
 #         packages: write
+#         security-events: write   # Required for Trivy SARIF upload
 #       with:
 #         image-name: sirosfoundation/my-service
 #
@@ -35,6 +37,7 @@
 #       permissions:
 #         contents: read
 #         packages: write
+#         security-events: write
 #       with:
 #         image-name: sirosfoundation/my-server
 #         dockerfile: ./Dockerfile
@@ -44,6 +47,7 @@
 #       permissions:
 #         contents: read
 #         packages: write
+#         security-events: write
 #       with:
 #         image-name: sirosfoundation/my-admin
 #         dockerfile: ./Dockerfile.admin
@@ -56,6 +60,7 @@
 #       permissions:
 #         contents: read
 #         packages: write
+#         security-events: write
 #       with:
 #         image-name: sirosfoundation/wallet-frontend
 #         platforms: linux/amd64
@@ -84,6 +89,7 @@
 #       permissions:
 #         contents: read
 #         packages: write
+#         security-events: write
 #       with:
 #         image-name: sirosfoundation/my-service
 #         custom-ref: ${{ inputs.git_ref }}
@@ -133,6 +139,11 @@ on:
         type: string
         required: false
         default: ''
+      trivy-scan:
+        description: 'Enable Trivy CVE scanning of the built image'
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   build-and-push:
@@ -146,6 +157,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
 
     steps:
       - name: Checkout repository
@@ -210,6 +222,7 @@ jobs:
           tags: ${{ inputs.tags }}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.context }}
@@ -221,3 +234,46 @@ jobs:
           build-args: ${{ inputs.build-args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # --- Trivy CVE scanning ---
+
+      - name: Build scan image (PR only)
+        if: inputs.trivy-scan && startsWith(github.ref, 'refs/pull/')
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          tags: ${{ inputs.image-name }}:trivy-scan
+          build-args: ${{ inputs.build-args }}
+          cache-from: type=gha
+
+      - name: Determine Trivy scan target
+        id: trivy-target
+        if: inputs.trivy-scan
+        run: |
+          if [[ "${{ github.ref }}" == refs/pull/* ]]; then
+            echo "image-ref=${{ inputs.image-name }}:trivy-scan" >> "$GITHUB_OUTPUT"
+          else
+            # Scan the first tag from the pushed image
+            FIRST_TAG=$(echo '${{ steps.dispatch-tag.outputs.tags || steps.meta-custom.outputs.tags || steps.meta-standard.outputs.tags }}' | head -1)
+            echo "image-ref=${FIRST_TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Trivy vulnerability scan
+        if: inputs.trivy-scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.trivy-target.outputs.image-ref }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy scan results
+        if: inputs.trivy-scan && !cancelled()
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container
