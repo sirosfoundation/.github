@@ -144,6 +144,11 @@ on:
         type: boolean
         required: false
         default: true
+      trivy-vex-url:
+        description: 'URL to an org-level OpenVEX document. Downloaded and merged with any repo-level .trivyvex.openvex.json.'
+        type: string
+        required: false
+        default: 'https://raw.githubusercontent.com/sirosfoundation/.github/main/vex/org.openvex.json'
       push-pr-images:
         description: 'Push images for PR builds (tagged pr-<N>). Only same-repo PRs from org members; fork PRs never push.'
         type: boolean
@@ -283,9 +288,32 @@ jobs:
             echo "image-ref=${FIRST_TAG}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Download VEX documents
+        id: vex
+        if: inputs.trivy-scan
+        run: |
+          VEX_ARGS=""
+          # Download org-level VEX (non-fatal if missing)
+          if [[ -n "${{ inputs.trivy-vex-url }}" ]]; then
+            if curl -fsSL -o org.openvex.json "${{ inputs.trivy-vex-url }}" 2>/dev/null; then
+              echo "Downloaded org-level VEX from ${{ inputs.trivy-vex-url }}"
+              VEX_ARGS="org.openvex.json"
+            else
+              echo "::warning::Org-level VEX not found at ${{ inputs.trivy-vex-url }} — skipping"
+            fi
+          fi
+          # Check for repo-level VEX (committed to the repo)
+          if [[ -f ".trivyvex.openvex.json" ]]; then
+            echo "Found repo-level VEX: .trivyvex.openvex.json"
+            VEX_ARGS="${VEX_ARGS:+$VEX_ARGS,}.trivyvex.openvex.json"
+          fi
+          echo "vex-args=${VEX_ARGS}" >> "$GITHUB_OUTPUT"
+
       - name: Run Trivy vulnerability scan
         if: inputs.trivy-scan
         uses: aquasecurity/trivy-action@0.28.0
+        env:
+          TRIVY_VEX: ${{ steps.vex.outputs.vex-args }}
         with:
           image-ref: ${{ steps.trivy-target.outputs.image-ref }}
           format: sarif
