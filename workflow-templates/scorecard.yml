@@ -1,0 +1,38 @@
+# OpenSSF Scorecard — supply-chain security posture assessment.
+# Runs weekly and on push to the default branch.
+# Results appear in the GitHub Security tab.
+#
+# Adopt: Actions → New workflow → "OpenSSF Scorecard" or copy to .github/workflows/scorecard.yml
+name: OpenSSF Scorecard
+
+on:
+  push:
+    branches: [$default-branch]
+  schedule:
+    - cron: "0 4 * * 1" # Monday 04:00
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # Upload SARIF
+      id-token: write        # Publish results
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@62b2cac7ed8198b15735ed49ab1e5cf35480ba46 # v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif

@@ -1,0 +1,38 @@
+# SonarCloud code quality and security analysis.
+# Runs on push and PR to the default branch.
+#
+# Adopt: Actions → New workflow → "SonarCloud" or copy to .github/workflows/sonarcloud.yml
+#
+# Prerequisites:
+#   1. Create a SonarCloud organisation linked to sirosfoundation
+#   2. Import the repository in SonarCloud
+#   3. Add SONAR_TOKEN as an org-level Actions secret
+name: SonarCloud
+
+on:
+  push:
+    branches: [$default-branch]
+  pull_request:
+    branches: [$default-branch]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sonarcloud:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for accurate blame/coverage
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ github.repository_owner }}
+            -Dsonar.projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}

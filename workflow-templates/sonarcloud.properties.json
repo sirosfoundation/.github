@@ -1,0 +1,6 @@
+{
+  "name": "SonarCloud",
+  "description": "Continuous code quality and security analysis with SonarCloud",
+  "iconName": "octicon meter",
+  "categories": ["security", "code-quality"]
+}
