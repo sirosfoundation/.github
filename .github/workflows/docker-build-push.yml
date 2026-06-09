@@ -144,12 +144,18 @@ on:
         type: boolean
         required: false
         default: true
+      push-pr-images:
+        description: 'Push images for PR builds (tagged pr-<N>). Only same-repo PRs from org members; fork PRs never push.'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     # Trust gate: run automatically for pushes, tags, dispatches, and same-repo PRs.
     # Fork PRs require the 'safe-to-build' label (only org members can apply it).
+    # Fork PRs NEVER get images pushed, even with push-pr-images enabled.
     if: >-
       !startsWith(github.ref, 'refs/pull/')
       || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
@@ -171,8 +177,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Determine if push is allowed
+        id: push-gate
+        run: |
+          IS_PR=${{ startsWith(github.ref, 'refs/pull/') }}
+          IS_SAME_REPO=${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name || '' }}
+          PUSH_PR=${{ inputs.push-pr-images }}
+          if [[ "$IS_PR" == "true" ]]; then
+            if [[ "$PUSH_PR" == "true" && "$IS_SAME_REPO" == "true" ]]; then
+              echo "push=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "push=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Log in to Container Registry
-        if: ${{ !startsWith(github.ref, 'refs/pull/') }}
+        if: steps.push-gate.outputs.push == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -228,7 +250,7 @@ jobs:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
-          push: ${{ !startsWith(github.ref, 'refs/pull/') }}
+          push: ${{ steps.push-gate.outputs.push == 'true' }}
           tags: ${{ steps.dispatch-tag.outputs.tags || steps.meta-custom.outputs.tags || steps.meta-standard.outputs.tags }}
           labels: ${{ steps.meta-custom.outputs.labels || steps.meta-standard.outputs.labels }}
           build-args: ${{ inputs.build-args }}
@@ -237,8 +259,8 @@ jobs:
 
       # --- Trivy CVE scanning ---
 
-      - name: Build scan image (PR only)
-        if: inputs.trivy-scan && startsWith(github.ref, 'refs/pull/')
+      - name: Build scan image (non-pushed builds only)
+        if: inputs.trivy-scan && steps.push-gate.outputs.push != 'true'
         uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.context }}
@@ -253,7 +275,7 @@ jobs:
         id: trivy-target
         if: inputs.trivy-scan
         run: |
-          if [[ "${{ github.ref }}" == refs/pull/* ]]; then
+          if [[ "${{ steps.push-gate.outputs.push }}" != "true" ]]; then
             echo "image-ref=${{ inputs.image-name }}:trivy-scan" >> "$GITHUB_OUTPUT"
           else
             # Scan the first tag from the pushed image

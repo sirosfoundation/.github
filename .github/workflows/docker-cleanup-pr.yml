@@ -1,0 +1,67 @@
+# Reusable PR Image Cleanup Workflow
+# https://github.com/sirosfoundation/.github
+#
+# Deletes GHCR container image versions tagged with pr-<N> when a PR is closed.
+# Use alongside docker-build-push.yml with push-pr-images: true.
+#
+# Usage:
+#
+#   on:
+#     pull_request:
+#       types: [closed]
+#
+#   jobs:
+#     cleanup:
+#       uses: sirosfoundation/.github/.github/workflows/docker-cleanup-pr.yml@main
+#       permissions:
+#         packages: write
+#       with:
+#         image-name: sirosfoundation/my-service
+#
+name: Cleanup PR Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: 'GHCR image name without registry prefix (e.g. sirosfoundation/go-trust)'
+        type: string
+        required: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Delete PR image from GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Extract the package name (portion after the org/)
+          PACKAGE="${IMAGE_NAME#*/}"
+          ORG="${IMAGE_NAME%%/*}"
+          PR_TAG="pr-${PR_NUMBER}"
+
+          echo "Looking for ${ORG}/${PACKAGE}:${PR_TAG}"
+
+          # Find the version ID for this PR tag
+          VERSION_ID=$(gh api \
+            "/orgs/${ORG}/packages/container/${PACKAGE}/versions" \
+            --paginate --jq ".[] | select(.metadata.container.tags | index(\"${PR_TAG}\")) | .id" \
+            2>/dev/null || true)
+
+          if [[ -z "$VERSION_ID" ]]; then
+            echo "No image found with tag ${PR_TAG} — nothing to clean up"
+            exit 0
+          fi
+
+          echo "Deleting version ${VERSION_ID} (tag: ${PR_TAG})"
+          gh api \
+            --method DELETE \
+            "/orgs/${ORG}/packages/container/${PACKAGE}/versions/${VERSION_ID}" \
+            2>/dev/null
+
+          echo "Deleted ghcr.io/${IMAGE_NAME}:${PR_TAG}"
