@@ -1,0 +1,223 @@
+# Reusable Docker Build & Push Workflow
+# https://github.com/sirosfoundation/.github
+#
+# Builds a Docker image using Buildx and pushes to GHCR.
+# Encapsulates the standard tag policy, multi-platform builds, and caching.
+#
+# Trust model:
+#   - Pushes, tags, and workflow_dispatch: always run
+#   - PRs from same repo (org members): always run
+#   - PRs from forks (external contributors): require 'safe-to-build' label
+#
+# Standard usage (Go or Node project with single Dockerfile):
+#
+#   on:
+#     push:
+#       branches: [main]
+#       tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+#     pull_request:
+#       branches: [main]
+#
+#   jobs:
+#     docker:
+#       uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
+#       permissions:
+#         contents: read
+#         packages: write
+#       with:
+#         image-name: sirosfoundation/my-service
+#
+# Multi-image repo (multiple Dockerfiles):
+#
+#   jobs:
+#     server:
+#       uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
+#       permissions:
+#         contents: read
+#         packages: write
+#       with:
+#         image-name: sirosfoundation/my-server
+#         dockerfile: ./Dockerfile
+#
+#     admin:
+#       uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
+#       permissions:
+#         contents: read
+#         packages: write
+#       with:
+#         image-name: sirosfoundation/my-admin
+#         dockerfile: ./Dockerfile.admin
+#
+# Custom tag policy (e.g. wallet-frontend):
+#
+#   jobs:
+#     docker:
+#       uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
+#       permissions:
+#         contents: read
+#         packages: write
+#       with:
+#         image-name: sirosfoundation/wallet-frontend
+#         platforms: linux/amd64
+#         tags: |
+#           type=semver,pattern={{version}}
+#           type=raw,value=latest,enable=${{ contains(github.ref, '-sirosid.') }}
+#           type=raw,value=unstable,enable=${{ github.ref == 'refs/heads/release/sirosid' }}
+#           type=sha,prefix=unstable-,enable=${{ github.ref == 'refs/heads/release/sirosid' }}
+#
+# Manual dispatch (workflow_dispatch) with custom ref/tag:
+#
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         git_ref:
+#           description: 'Git ref to build'
+#           required: true
+#           default: 'main'
+#         image_tag:
+#           description: 'Custom image tag'
+#           required: false
+#
+#   jobs:
+#     docker:
+#       uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
+#       permissions:
+#         contents: read
+#         packages: write
+#       with:
+#         image-name: sirosfoundation/my-service
+#         custom-ref: ${{ inputs.git_ref }}
+#         custom-tag: ${{ inputs.image_tag }}
+#
+name: Build and Push Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: 'GHCR image name without registry prefix (e.g. sirosfoundation/go-trust)'
+        type: string
+        required: true
+      dockerfile:
+        description: 'Path to Dockerfile'
+        type: string
+        required: false
+        default: './Dockerfile'
+      context:
+        description: 'Docker build context path'
+        type: string
+        required: false
+        default: '.'
+      platforms:
+        description: 'Target platforms (comma-separated)'
+        type: string
+        required: false
+        default: 'linux/amd64,linux/arm64'
+      build-args:
+        description: 'Docker build arguments (multiline KEY=VALUE)'
+        type: string
+        required: false
+        default: ''
+      tags:
+        description: 'Override default metadata-action tags config. Leave empty to use standard policy.'
+        type: string
+        required: false
+        default: ''
+      custom-ref:
+        description: 'Custom git ref to checkout (for workflow_dispatch builds)'
+        type: string
+        required: false
+        default: ''
+      custom-tag:
+        description: 'Custom image tag, bypasses metadata-action (for workflow_dispatch builds)'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    # Trust gate: run automatically for pushes, tags, dispatches, and same-repo PRs.
+    # Fork PRs require the 'safe-to-build' label (only org members can apply it).
+    if: >-
+      !startsWith(github.ref, 'refs/pull/')
+      || github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+      || contains(github.event.pull_request.labels.*.name, 'safe-to-build')
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.custom-ref || github.ref }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container Registry
+        if: ${{ !startsWith(github.ref, 'refs/pull/') }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute custom dispatch tag
+        id: dispatch-tag
+        if: inputs.custom-tag != ''
+        run: |
+          # Sanitize the custom tag for Docker compatibility
+          SAFE_TAG=$(echo "${{ inputs.custom-tag }}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/[^a-z0-9._-]/-/g' \
+            | sed 's/[-._]\{2,\}/-/g' \
+            | sed 's/^[-._]\+//; s/[-._]\+$//' \
+            | cut -c1-128 \
+          )
+          if [[ -z "$SAFE_TAG" ]]; then
+            echo "::error::custom-tag '${{ inputs.custom-tag }}' sanitized to empty string"
+            exit 1
+          fi
+          echo "tags=ghcr.io/${{ inputs.image-name }}:${SAFE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract metadata (standard tag policy)
+        id: meta-standard
+        if: inputs.custom-tag == '' && inputs.tags == ''
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ inputs.image-name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=
+            type=semver,pattern=latest
+            type=raw,value=latest-build,enable={{is_default_branch}}
+
+      - name: Extract metadata (custom tag policy)
+        id: meta-custom
+        if: inputs.custom-tag == '' && inputs.tags != ''
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ inputs.image-name }}
+          tags: ${{ inputs.tags }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ !startsWith(github.ref, 'refs/pull/') }}
+          tags: ${{ steps.dispatch-tag.outputs.tags || steps.meta-custom.outputs.tags || steps.meta-standard.outputs.tags }}
+          labels: ${{ steps.meta-custom.outputs.labels || steps.meta-standard.outputs.labels }}
+          build-args: ${{ inputs.build-args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

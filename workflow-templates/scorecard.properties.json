@@ -1,0 +1,6 @@
+{
+  "name": "OpenSSF Scorecard",
+  "description": "Supply-chain security posture assessment via OpenSSF Scorecard",
+  "iconName": "octicon shield-check",
+  "categories": ["security"]
+}
