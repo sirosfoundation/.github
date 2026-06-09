@@ -1,0 +1,9 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://siros.org/vex/org/2026-06-09",
+  "author": "SIROS Foundation Security Team",
+  "timestamp": "2026-06-09T00:00:00Z",
+  "version": 1,
+  "tooling": "manual",
+  "statements": []
+}

@@ -148,7 +148,7 @@ on:
         description: 'URL to an org-level OpenVEX document. Downloaded and merged with any repo-level .trivyvex.openvex.json.'
         type: string
         required: false
-        default: 'https://raw.githubusercontent.com/sirosfoundation/compliance/main/vex/org.openvex.json'
+        default: 'https://raw.githubusercontent.com/sirosfoundation/.github/main/vex/org.openvex.json'
       push-pr-images:
         description: 'Push images for PR builds (tagged pr-<N>). Only same-repo PRs from org members; fork PRs never push.'
         type: boolean
