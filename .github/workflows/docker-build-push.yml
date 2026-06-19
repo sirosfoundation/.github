@@ -158,7 +158,7 @@ on:
         description: 'Sign the image digest with Ed25519 (YubiHSM2) and submit to Sigsum. Requires self-hosted signer runner.'
         type: boolean
         required: false
-        default: true
+        default: false
       sigsum-policy:
         description: 'Sigsum trust policy name'
         type: string
@@ -348,7 +348,11 @@ jobs:
   # The proof artifact can be used for offline verification by anyone with the public key.
   sign-image:
     needs: build-and-push
-    if: inputs.sigsum-sign && needs.build-and-push.outputs.pushed == 'true' && needs.build-and-push.outputs.digest != ''
+    if: >-
+      inputs.sigsum-sign
+      && needs.build-and-push.outputs.pushed == 'true'
+      && needs.build-and-push.outputs.digest != ''
+      && github.event_name != 'pull_request'
     runs-on: [self-hosted, signer]
 
     steps:
