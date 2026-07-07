@@ -482,7 +482,100 @@ every client platform. It is a Rust crate that compiles to:
 
 ---
 
-## 17. Wallet Companion (Browser Extension)
+## 17. Private Data Blob — Versioned Schema and Cross-Client Sync
+
+The wallet private data blob is the **sole mechanism for persisting and synchronising
+credential state across all clients** (browser, Android, iOS). It is governed by
+`privatedata-spec` (normative) with `wallet-frontend` as reference implementation.
+
+### Container format
+
+```
+{
+  "mainKey": { publicKey: P-256 ECDH point },   // key-encapsulation recipient
+  "prfKeys": [                                    // one entry per registered passkey
+    {
+      "credentialId": <binary>,
+      "prfSalt":  <32 bytes>,
+      "hkdfSalt": <32 bytes>,
+      "hkdfInfo": <binary>,        // normative UTF-8 value: "eDiplomas PRF"
+      "keypair":  { publicKey, privateKey (AES-GCM wrapped) },
+      "unwrapKey": { wrappedKey: <AES-KW wrapped main key> }
+    }, ...
+  ],
+  "jwe": "<compact JWE>"
+}
+```
+
+### Key derivation chain (MUST follow exactly)
+
+```
+WebAuthn PRF output
+  → HKDF-SHA-256(salt=hkdfSalt, info="eDiplomas PRF") → 32-byte PRF key
+  → AES-GCM decrypt keypair.privateKey.unwrapKey.wrappedKey → ECDH private key
+  → ECDH(ECDH-private, mainKey.publicKey) → 32-byte AES-KW secret
+  → AES-KW unwrap prfKeys[i].unwrapKey.wrappedKey → 256-bit AES-GCM main key
+  → JWE decrypt (alg=A256GCMKW, enc=A256GCM) → WalletStateContainer JSON
+```
+
+- The HKDF info string `"eDiplomas PRF"` is **normative and immutable**. Do not
+  change it, parameterise it, or derive a new one for new key types.
+- Binary fields inside JSON MUST be tagged: `{ "$b64u": "<base64url-no-padding>" }`.
+
+### Schema versioning
+
+- Current normative schema version: **`S.schemaVersion = 3`** (`WalletStateSchemaVersion3`).
+- Legacy versions (1, 2) are **read-only** — readers MUST accept them; writers MUST
+  emit v3. Do not write v1/v2 containers from new code.
+- Schema version is inside the JWE plaintext `S.schemaVersion` field. Always check
+  it before processing.
+- Reference files: `wallet-frontend/src/services/WalletStateSchemaVersion3.ts`,
+  `WalletStateSchemaVersion1.ts`.
+
+### Plaintext structure (`WalletStateContainer`)
+
+The JWE plaintext is UTF-8 JSON. Fields that **MUST be round-trip preserved**:
+
+| Field | Notes |
+|-------|-------|
+| `events[]` + `lastEventHash` | Event-sourced history — never drop or reorder |
+| `S.credentials[]` | Full entry including `format`, `kid`, `instanceId`, `batchId`, `credentialIssuerIdentifier`, `credentialConfigurationId` |
+| `S.keypairs[]` | Including `keypair.privateKey` JWK |
+| `S.presentations[]` | Presentation history |
+| `S.credentialIssuanceSessions[]` | In-progress issuance sessions |
+| `S.settings.openidRefreshTokenMaxAgeInSeconds` | Default `"0"` if absent, never omit |
+
+### Cross-client synchronisation
+
+- Backend stores the container at `POST /user/session/private-data`; serves it at
+  `GET /user/session/private-data` (base64url-tagged field `privateData.$b64u`).
+- **Optimistic concurrency**: clients MUST send `X-Private-Data-If-Match: <etag>`
+  (value from last `X-Private-Data-ETag` response header) on every write.
+- On `412 Precondition Failed`: re-fetch remote, **merge by replaying event history**
+  (remote wins on conflict), then retry the write.
+- Never silently overwrite: a write without an ETag is only acceptable for a brand-new
+  container where no prior state exists.
+
+### Conformance testing
+
+- Any change to schema, key derivation, serialisation, or field preservation MUST
+  update `privatedata-spec/test-vectors/`.
+- All three clients must pass: `conformance-runner.sh --client {ts,kotlin,swift}`.
+  This is a **gating check** — PRs that break cross-client compatibility cannot merge.
+- Required test cases: encrypt canonical vector, decrypt canonical vector, round-trip,
+  multi-passkey container, metadata preservation, event history preservation,
+  legacy format acceptance.
+
+### Upcoming: two-container split (WSCD migration)
+
+See §16 for the planned separation of key material from credential state into
+two independent JWE containers (`type=keys`, `type=state`). Until that migration
+is complete, `S.keypairs[].keypair.privateKey` remains in the single container.
+Do not anticipate the split in new code without coordinating with §16.
+
+---
+
+## 18. Wallet Companion (Browser Extension)
 
 When working in the `wallet-companion` repository:
 
@@ -515,7 +608,7 @@ When working in the `wallet-companion` repository:
 
 ---
 
-## 18. Wallet Messaging Protocol (WMP)
+## 19. Wallet Messaging Protocol (WMP)
 
 When working in `wmp`, `go-wmp`, or `wmp-js`:
 
@@ -532,7 +625,7 @@ When working in `wmp`, `go-wmp`, or `wmp-js`:
 
 ---
 
-## 19. Version Control and PR Workflow
+## 20. Version Control and PR Workflow
 
 - **Never push directly to `main`** — always open a PR from a feature branch.
 - Branch naming: `feat/<short-description>`, `fix/<short-description>`, `chore/<topic>`.
