@@ -17,8 +17,7 @@ SIROS is a production digital-identity wallet platform. The core components are:
 | `go-spocp` | SPOCP rule-based ACL engine with AuthZEN API |
 | `go-wmp` | Go library for the Wallet Messaging Protocol (WMP) |
 | `go-cryptoutil` | Extensible crypto utilities; brainpool, algorithm mapping |
-| `go-wallet-as` | Standalone AuthServer (WebAuthn/passkey, CSC, r2ps) |
-| `wmp` | WMP specification, JSON Schema, test vectors |
+| `github.com/leifj/wmp` | WMP specification, JSON Schema, test vectors |
 | `siros-sdk-kotlin` | Android SDK (transport, auth, keystore, flow, credentials) |
 | `siros-sdk-swift` | iOS/macOS SDK (same module structure as Kotlin) |
 | `wallet-frontend` | Reference web wallet (React/TypeScript); the reference implementation |
@@ -27,10 +26,12 @@ SIROS is a production digital-identity wallet platform. The core components are:
 | `go-grc` | GRC CLI: compliance-as-code for EUDI/ISO 27001/GDPR |
 | `compliance` | Control catalog, framework mappings, audit findings |
 | `go-r2ps-service` | Remote WSCD / r2ps signing service |
+| `r2ps-client` | Remote WSCD client |
 | `go-oidf-ta` | OpenID Federation Trust Anchor service |
 | `wallet-companion` | Browser extension: DC API bridge, wallet auto-registration, protocol-aware routing |
 | `siros-wscd-manager` | Rust WSCD Manager: pluggable key management for all clients (softkey/r2ps/fido2) |
 | `sirosid-dev` | Local Docker Compose development environment |
+| `native-ios-wrapper` and`native-android-wrapper` | android and iOS wrapper native apps uses the wallet-frontend web view - separate from the experimental iOS/android SDKs |
 
 > **Never reference or suggest usage of `wallet-backend-server`** — it is deprecated and
 > superseded by `go-wallet-backend`. Also exclude: `wallet-e2e-tests` (archived),
@@ -93,7 +94,7 @@ In Go, use `go-cryptoutil.AlgorithmRegistry`. Do not scatter algorithm constants
 - The **FIDO2 PRF extension** drives key derivation for encrypted credential storage:
   `PRF output → HKDF-SHA256 → AES-256 main key → JWE credential containers`.
 - Use the **FIDO2 raw signature extension** for key binding proofs as it becomes
-  available on platforms.
+  available on platforms via the rawSign plugin in siros-wscd-manager
 - WebAuthn RP-ID is a **plain hostname**, never a URL with scheme or port.
 - The Android APK key hash for `assetlinks.json` must be derived dynamically from the
   debug/release keystore — never hardcoded.
@@ -123,6 +124,10 @@ Rules:
 `go-trust` supports: ETSI TS 119 612 (TSL), ETSI TS 119 602 (LoTE),
 OpenID Federation, DID Web, and whitelist registries. Add support for new
 trust frameworks by extending `go-trust`, not by implementing local checks.
+
+`go-trust` is also used as a DID resolver (for DID-based trust mechanisms) and then the resolver is combined with the trust decision.
+
+`go-wallet-backend` resolves metadata and then calls go-trust to validate trust in the signatures. These are different types of resolution: one (DID) resolves names to keys that are then trusted because of their DID documents, the other (metadata for issuers, credentials and authorization servers) resolve to signed data where the signature is trust-checked by go-trust. DIDs are managed by go-trust but metadata by go-wallet-backend.
 
 ---
 
