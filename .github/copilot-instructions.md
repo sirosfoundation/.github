@@ -28,6 +28,7 @@ SIROS is a production digital-identity wallet platform. The core components are:
 | `compliance` | Control catalog, framework mappings, audit findings |
 | `go-r2ps-service` | Remote WSCD / r2ps signing service |
 | `go-oidf-ta` | OpenID Federation Trust Anchor service |
+| `wallet-companion` | Browser extension: DC API bridge, wallet auto-registration, protocol-aware routing |
 | `sirosid-dev` | Local Docker Compose development environment |
 
 > **Never reference or suggest usage of `wallet-backend-server`** — it is deprecated and
@@ -381,9 +382,77 @@ docs/adr/    # Architecture Decision Records
 - Run `grc derive` and `grc render` after any control or finding change.
 - Control IDs follow the pattern `SID-<DOMAIN>-<NN>` (e.g., `SID-AUTH-01`, `SID-CRYPTO-03`).
 
+### AI-Assisted Compliance with go-grc MCP
+
+`go-grc` ships an MCP server (`grc serve --mcp`) that exposes the full compliance
+catalog to AI assistants (GitHub Copilot, Claude, etc.) as tools and resources.
+
+**When working on compliance tasks, prefer using these MCP tools over manual file reads:**
+
+| MCP tool / resource | When to use |
+|---------------------|-------------|
+| `search_controls` | Find controls matching a keyword or topic |
+| `search_findings` | Locate open/closed audit findings |
+| `compliance_gap_analysis` | Identify uncovered requirements for a framework |
+| `control_coverage` | Check which frameworks reference a given `SID-*` control |
+| `finding_statistics` | Get open/closed finding counts before drafting a fix |
+| `risk_summary` | Review accepted risks before proposing mitigations |
+| `list_architecture_docs` | Discover relevant architecture/security docs |
+| `grc://catalog/control/{controlId}` | Full control detail including evidence links |
+| `grc://audit/finding/{findingId}` | Finding detail including linked PRs and evidence |
+| `grc://mapping/{frameworkId}` | Full framework ↔ control mapping |
+| `grc://architecture/{document}` | Architecture or security document content |
+
+**Workflow for AI-assisted compliance work:**
+
+1. **Assess impact**: before implementing a feature, call `search_controls` to find
+   relevant controls; call `compliance_gap_analysis` for the affected framework.
+2. **Link evidence**: after implementing, add the PR URL or deployed endpoint as
+   evidence to the relevant finding YAML in `compliance/audits/`.
+3. **Derive and render**: run `grc derive && grc render` to recompute statuses and
+   regenerate the compliance site.
+4. **Sync findings**: run `grc sync` to push finding status changes back to GitHub issues.
+5. **Export for auditors**: use `grc export` to produce a JSON evidence package.
+
+**Never manually edit derived status fields** in control or mapping YAML —
+they are overwritten by `grc derive`. Edit only source data (findings, evidence).
+
 ---
 
-## 16. Wallet Messaging Protocol (WMP)
+## 16. Wallet Companion (Browser Extension)
+
+When working in the `wallet-companion` repository:
+
+- **Runtime**: WebExtensions API (Chrome, Firefox, Safari). Use `browser.*` via
+  the `webextension-polyfill` shim — never `chrome.*` directly.
+- **Language**: TypeScript; linting via **Biome** (`biome check --write`).
+  Do not introduce ESLint or Prettier — Biome is the sole formatter/linter.
+- **Build**: Vite for each browser target (`make build-chrome`, `make build-firefox`,
+  `make build-safari`). Output lands in `dist/<browser>/`.
+- **Package manager**: pnpm workspaces. Run `pnpm install` not `npm install`.
+- **Testing**:
+  - Unit / integration: **Vitest** (`vitest.config.ts` / `vitest.integration.config.ts`)
+  - End-to-end: **Playwright** (`vitest.e2e.config.ts`) — requires a browser binary.
+  - `make test` runs unit + integration; `make test-e2e` runs Playwright.
+- **Architecture layers** (do not mix):
+  - `src/background/` — service worker: storage, icon state, RPC dispatch
+  - `src/content/dc-api/` — DC API intercept (`navigator.credentials.get` override)
+  - `src/content/protocols/` — OID4VP protocol plugins (one file per variant)
+  - `src/content/public-api/` — `window.WalletCompanion` auto-registration surface
+  - `src/shared/` — types and utilities shared between layers
+  - `packages/wcc-types/` — published TypeScript types for the public API
+- **Protocol plugins**: each plugin implements the `ProtocolPlugin` interface.
+  Add new protocol support as a new plugin file — do not modify existing plugins.
+- **DC API routing**: `wallet-companion` delegates unrecognised protocols to the
+  browser's native DC API implementation — never throw for unsupported protocols.
+- **Security**: the extension content script runs in an isolated world. Never
+  expose internal state to page scripts; use structured-clone-safe messages only.
+- **Wallet registration** is ephemeral (session storage) unless the user opts in.
+  Never persist wallet credentials or credential content in extension storage.
+
+---
+
+## 17. Wallet Messaging Protocol (WMP)
 
 When working in `wmp`, `go-wmp`, or `wmp-js`:
 
@@ -400,7 +469,7 @@ When working in `wmp`, `go-wmp`, or `wmp-js`:
 
 ---
 
-## 17. Version Control and PR Workflow
+## 18. Version Control and PR Workflow
 
 - **Never push directly to `main`** — always open a PR from a feature branch.
 - Branch naming: `feat/<short-description>`, `fix/<short-description>`, `chore/<topic>`.
