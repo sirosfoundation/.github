@@ -34,8 +34,8 @@ SIROS is a production digital-identity wallet platform. The core components are:
 | `native-ios-wrapper` and`native-android-wrapper` | android and iOS wrapper native apps uses the wallet-frontend web view - separate from the experimental iOS/android SDKs |
 
 > **Never reference or suggest usage of `wallet-backend-server`** — it is deprecated and
-> superseded by `go-wallet-backend`. Also exclude: `wallet-e2e-tests` (archived),
-> `mtcvctm` (archived).
+> superseded by `go-wallet-backend`. Also exclude: `go-wallet-as` (deprecated),
+> `wallet-e2e-tests` (archived), `mtcvctm` (archived).
 
 ---
 
