@@ -29,6 +29,7 @@ SIROS is a production digital-identity wallet platform. The core components are:
 | `go-r2ps-service` | Remote WSCD / r2ps signing service |
 | `go-oidf-ta` | OpenID Federation Trust Anchor service |
 | `wallet-companion` | Browser extension: DC API bridge, wallet auto-registration, protocol-aware routing |
+| `siros-wscd-manager` | Rust WSCD Manager: pluggable key management for all clients (softkey/r2ps/fido2) |
 | `sirosid-dev` | Local Docker Compose development environment |
 
 > **Never reference or suggest usage of `wallet-backend-server`** — it is deprecated and
@@ -74,6 +75,14 @@ All cryptographic operations MUST use established, well-audited libraries:
 
 **Algorithm mapping across protocols (JWS / COSE / XML-DSIG) must be centralised.**
 In Go, use `go-cryptoutil.AlgorithmRegistry`. Do not scatter algorithm constants across packages.
+
+### Key operations (signing, key generation, key attestation)
+- All client-side key operations go through `siros-wscd-manager` (`WscdManager` + plugin).
+  Never call `crypto.subtle`, `CryptoKit`, or Android Keystore directly for wallet keys.
+- In wallet-frontend: use `WalletSigner` / `KeystoreSignerAdapter` (WSCD WASM bridge).
+- In Kotlin/Swift SDKs: call the UniFFI-generated `WscdManager` bindings.
+- `SecurityProperties` (`key_storage`, `user_authentication`, `certification`, `amr`) are
+  reported by the plugin and must be forwarded in key-attestation requests — never hardcoded.
 
 ---
 
@@ -218,11 +227,11 @@ Engine visibility table (do not violate):
 
 Three clients serve a single `go-wallet-backend`. They MUST maintain feature parity:
 
-| Client | Language | Auth | Transport |
-|--------|----------|------|-----------|
-| `wallet-frontend` | TypeScript / React | WebAuthn (browser) | Native WS + HTTP |
-| `siros-sdk-kotlin` | Kotlin / Android | Credential Manager | WS + HTTP+SSE |
-| `siros-sdk-swift` | Swift / iOS/macOS | ASAuthorizationController | WS + HTTP+SSE |
+| Client | Language | Auth | Transport | Key Backend |
+|--------|----------|------|-----------|-------------|
+| `wallet-frontend` | TypeScript / React | WebAuthn (browser) | Native WS + HTTP | WSCD WASM (`softkey`) |
+| `siros-sdk-kotlin` | Kotlin / Android | Credential Manager | WS + HTTP+SSE | WSCD UniFFI |
+| `siros-sdk-swift` | Swift / iOS/macOS | ASAuthorizationController | WS + HTTP+SSE | WSCD UniFFI |
 
 Rules:
 - **`wallet-frontend` is the reference implementation.** When in doubt about
@@ -419,7 +428,61 @@ they are overwritten by `grc derive`. Edit only source data (findings, evidence)
 
 ---
 
-## 16. Wallet Companion (Browser Extension)
+## 16. WSCD Manager — Key Management Abstraction
+
+`siros-wscd-manager` is the **single source of truth for all wallet key operations** across
+every client platform. It is a Rust crate that compiles to:
+- **Native shared library** — consumed by the Kotlin and Swift SDKs via UniFFI bindings
+  (`bindings/kotlin/`, `bindings/swift/`)
+- **WASM module** — consumed by `wallet-frontend` via `wasm-bindgen` (feature flag `wasm`)
+
+### Plugin model
+
+| Plugin | Backend | Auth | Lifecycle |
+|--------|---------|------|-----------|
+| `softkey` | Software P-256 / Ed25519 JWE container | None | Not implemented |
+| `r2ps` | Remote PKCS#11 HSM via R2PS | OPAQUE / WebAuthn | Fully implemented |
+| `fido2` | CTAP2 rawSign (Yubico previewSign) | FIDO2 | Fully implemented |
+
+### Rules when working in `siros-wscd-manager`
+
+- **Add new backends as plugins** — implement `WscdPlugin` trait. Never add backend-specific
+  code to `manager.rs`.
+- **Auth callbacks** (`AuthCallback` trait) are always provided by the host (SDK / frontend).
+  Plugins never prompt users directly and never store auth material.
+- **Progress callbacks** (`ProgressCallback` trait) push async status to the host UI
+  (spinners, step indicators). Always call them around long-running operations.
+- **Zeroize on drop**: all types holding private key bytes must `#[derive(Zeroize, ZeroizeOnDrop)]`.
+  Never copy raw key bytes into a non-zeroizing buffer.
+- **`SecurityProperties`** must be populated by every plugin for every key
+  (`key_storage`, `user_authentication`, `certification`, `amr` per CS-04 §7.1.3).
+  These flow into key-attestation JWT claims — never hardcode them at the call site.
+- Feature flags: `plugin-r2ps` and `plugin-fido2` are off by default; `wasm` enables the
+  WASM target. CI must test at minimum `--features plugin-r2ps,plugin-fido2`.
+- **Plugin resolution order**: per-key `plugin_id` binding → per-operation default →
+  global default. Do not bypass this order.
+- **Lifecycle API** (`register_lifecycle` / `activate_lifecycle` / `rotate_lifecycle` /
+  `destroy_lifecycle` / `lifecycle_status`) must be used for trust-context setup.
+  `softkey` returns `Unsupported` — that is correct and expected.
+
+### Rules when integrating WSCD in clients
+
+- **wallet-frontend**: use `WalletSigner` / `KeystoreSignerAdapter` — do not call
+  `crypto.subtle` directly for wallet signing operations. The WSCD WASM module is
+  loaded lazily; initialise it once per session. See `sirosfoundation/wallet-frontend`
+  PR #164 and `docs/wsca-migration-spec` branch for the migration plan.
+- **Kotlin SDK**: call UniFFI `WscdManager` from `sdk:keystore` module only.
+  Do not duplicate key generation in `sdk:auth`.
+- **Swift SDK**: same — `WscdManager` lives in `SirosKeystore`; do not call
+  `SecKey` APIs for wallet keys.
+- The **private data blob** (`WalletStateV4`) must NOT contain raw private key material.
+  Key containers and credential state are stored in **two separate JWE containers**,
+  both derived from the same PRF key but stored independently
+  (`POST /private-data?type=keys` and `POST /private-data?type=state`).
+
+---
+
+## 17. Wallet Companion (Browser Extension)
 
 When working in the `wallet-companion` repository:
 
@@ -452,7 +515,7 @@ When working in the `wallet-companion` repository:
 
 ---
 
-## 17. Wallet Messaging Protocol (WMP)
+## 18. Wallet Messaging Protocol (WMP)
 
 When working in `wmp`, `go-wmp`, or `wmp-js`:
 
@@ -469,7 +532,7 @@ When working in `wmp`, `go-wmp`, or `wmp-js`:
 
 ---
 
-## 18. Version Control and PR Workflow
+## 19. Version Control and PR Workflow
 
 - **Never push directly to `main`** — always open a PR from a feature branch.
 - Branch naming: `feat/<short-description>`, `fix/<short-description>`, `chore/<topic>`.
