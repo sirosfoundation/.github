@@ -335,6 +335,52 @@ pkg/         # Exported, reusable packages
 docs/adr/    # Architecture Decision Records
 ```
 
+### Audit logging — always use go-siros-set (SETs)
+
+**All security-relevant events MUST be emitted as Security Event Tokens (RFC 8417)**
+via `github.com/sirosfoundation/go-siros-set`. Never use plain log lines for audit events.
+
+```go
+import (
+    "github.com/sirosfoundation/go-siros-set/emit"
+    "github.com/sirosfoundation/go-siros-set/set"
+)
+
+// Initialise once per service (issuer URI + signing key)
+e := emit.New("https://my-service.siros.org", signer)
+
+// Emit on every auditable action
+e.Emit(set.EventKeySign,   map[string]any{"key_id": kid})
+e.Emit(set.EventWKAIssued, map[string]any{"wka_id": wkaID})
+e.EmitWithSubject(set.Event2FAAuthenticated, userID, map[string]any{"amr": "webauthn"})
+```
+
+Canonical event URIs (use constants from `set` package — never raw strings):
+
+| Namespace | Events |
+|-----------|--------|
+| `urn:siros:audit:key:*` | `generate`, `sign`, `agree`, `delete` |
+| `urn:siros:audit:wka:*` | `issued` |
+| `urn:siros:audit:wia:*` | `issued` |
+| `urn:siros:audit:wi:*` | `created`, `revoked`, `suspended`, `deactivated` |
+| `urn:siros:audit:2fa:*` | `registered`, `authenticated`, `changed`, `failed` |
+| `urn:siros:audit:admin:*` | `access` |
+| `urn:siros:audit:config:*` | `change` |
+| `urn:siros:audit:tenant:*` | `created`, `updated`, `deleted` |
+| `urn:siros:audit:user:*` | `added`, `removed`, `suspended`, `deleted` |
+| `urn:siros:audit:issuer:*` / `verifier:*` | `created`, `updated`, `deleted` |
+
+Rules:
+- Each emitted record includes `prev=SHA-256(previous JWS)` and `bseq` (block sequence) —
+  providing a **tamper-evident hash chain**. Do not emit SETs outside of `emit.Emitter`.
+- Aggregation and Merkle-tree checkpointing is handled by the `set-checkpoint` sidecar.
+  Services only call `emit.Emit`; they do not build Merkle trees themselves.
+- The emitter writes to `slog` at `INFO` level with `msg="secevent"`. Normal structured
+  log lines and SET lines coexist in the same stream.
+- `emit.New` requires a `set.Signer` — create it once from the service's signing key
+  (ES256 preferred; PKCS#11 via `pkcs11pool` for HSM-backed services).
+- Implements FAU_STG_EXT (WSCA-FAU-02) Common Criteria requirement.
+
 ### DoS hardening
 - Limit concurrent pending flows per session: `MaxPendingFlowsPerSession = 3`.
 - Apply per-IP rate limiting on all public endpoints.
