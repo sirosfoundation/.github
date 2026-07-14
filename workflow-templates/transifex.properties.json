@@ -1,0 +1,6 @@
+{
+  "name": "Transifex Translation Sync",
+  "description": "Push source strings to Transifex on merge, pull translations on schedule or manual trigger. Language-agnostic — works with Node, Go, and other project types.",
+  "iconName": "octicon-globe",
+  "categories": ["continuous-integration", "i18n"]
+}

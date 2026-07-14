@@ -1,0 +1,84 @@
+name: transifex-push
+description: >
+  Push source translation strings to Transifex.
+  Installs the Transifex CLI and pushes the configured source file.
+
+inputs:
+  tx-token:
+    description: 'Transifex API token (v3)'
+    required: true
+  tx-cli-version:
+    description: 'Transifex CLI version to install'
+    required: false
+    default: 'v1.6.16'
+  tx-cli-sha256:
+    description: 'Expected SHA256 checksum of the TX CLI tarball'
+    required: false
+    default: '29f5a59b3820adf140f584e9e3aad1fc55a7ed06540a5131eff91259e2db8431'
+  source-file:
+    description: 'Path to source language file (e.g. src/locales/en.json)'
+    required: true
+  tx-organization:
+    description: 'Transifex organization slug'
+    required: true
+  tx-project:
+    description: 'Transifex project slug'
+    required: true
+  tx-resource:
+    description: 'Transifex resource slug'
+    required: false
+    default: ''
+  tx-file-format:
+    description: 'Transifex file format (e.g. KEYVALUEJSON, STRUCTURED_JSON, PO)'
+    required: false
+    default: 'STRUCTURED_JSON'
+  source-lang:
+    description: 'Source language code'
+    required: false
+    default: 'en'
+
+runs:
+  using: composite
+  steps:
+    - name: Install Transifex CLI
+      shell: bash
+      env:
+        TX_CLI_VERSION: ${{ inputs.tx-cli-version }}
+        TX_CLI_SHA256: ${{ inputs.tx-cli-sha256 }}
+      run: |
+        curl -fsSL "https://github.com/transifex/cli/releases/download/${TX_CLI_VERSION}/tx-linux-amd64.tar.gz" \
+          -o /tmp/tx.tar.gz
+        echo "${TX_CLI_SHA256}  /tmp/tx.tar.gz" | sha256sum -c -
+        tar xz -C /usr/local/bin tx < /tmp/tx.tar.gz
+        rm /tmp/tx.tar.gz
+
+    - name: Generate .tx/config
+      shell: bash
+      env:
+        TX_ORGANIZATION: ${{ inputs.tx-organization }}
+        TX_PROJECT: ${{ inputs.tx-project }}
+        TX_RESOURCE: ${{ inputs.tx-resource }}
+        TX_FILE_FORMAT: ${{ inputs.tx-file-format }}
+        TX_SOURCE_LANG: ${{ inputs.source-lang }}
+        TX_SOURCE_FILE: ${{ inputs.source-file }}
+      run: |
+        resource="${TX_RESOURCE:-$(basename "${TX_SOURCE_FILE%.*}")}"
+        mkdir -p .tx
+        cat > .tx/config <<EOF
+        [main]
+        host = https://www.transifex.com
+
+        [o:${TX_ORGANIZATION}:p:${TX_PROJECT}:r:${resource}]
+        file_filter  = $(dirname "${TX_SOURCE_FILE}")/<lang>.json
+        source_file  = ${TX_SOURCE_FILE}
+        source_lang  = ${TX_SOURCE_LANG}
+        type         = ${TX_FILE_FORMAT}
+        EOF
+        echo "--- generated .tx/config ---"
+        cat .tx/config
+
+    - name: Push source strings
+      shell: bash
+      env:
+        TX_TOKEN: ${{ inputs.tx-token }}
+      run: tx push --source

@@ -1,0 +1,84 @@
+# Transifex translation sync
+#
+# Keeps source strings and translations in sync with Transifex.
+#
+# Push: on every merge to the default branch, source strings are
+# pushed to Transifex so translators always work on the latest copy.
+#
+# Pull: on a weekly schedule or manual trigger, completed translations
+# are pulled back and a PR is opened automatically.
+#
+# Prerequisites:
+#   1. Create a Transifex project at https://app.transifex.com
+#   2. Add a TX_TOKEN repository secret (Transifex API v3 token)
+#   3. Update the env block below with your org/project/resource slugs
+#      and the path to your source language file
+#
+# Works with any project type (Node, Go, Python, etc.) — the source
+# file just needs to be in a format Transifex supports.
+
+name: Translations
+
+on:
+  push:
+    branches: [$default-branch]
+    paths:
+      - 'src/locales/en.json'        # adjust to your source file path
+  schedule:
+    - cron: '0 6 * * 1'             # weekly Monday 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'push (source → Transifex) or pull (translations → repo)'
+        required: true
+        default: 'pull'
+        type: choice
+        options:
+          - push
+          - pull
+
+env:
+  TX_ORGANIZATION: 'sirosfoundation'         # ← your Transifex org slug
+  TX_PROJECT: 'wallet-frontend'              # ← your Transifex project slug
+  TX_SOURCE_FILE: 'src/locales/en.json'      # ← path to source language file
+  TX_FILE_FORMAT: 'STRUCTURED_JSON'          # ← STRUCTURED_JSON, KEYVALUEJSON, PO, etc.
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    name: Push source strings
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'push')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sirosfoundation/.github/actions/transifex-push@main
+        with:
+          tx-token: ${{ secrets.TX_TOKEN }}
+          tx-organization: ${{ env.TX_ORGANIZATION }}
+          tx-project: ${{ env.TX_PROJECT }}
+          source-file: ${{ env.TX_SOURCE_FILE }}
+          tx-file-format: ${{ env.TX_FILE_FORMAT }}
+
+  pull:
+    name: Pull translations
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'pull')
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sirosfoundation/.github/actions/transifex-pull@main
+        with:
+          tx-token: ${{ secrets.TX_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tx-organization: ${{ env.TX_ORGANIZATION }}
+          tx-project: ${{ env.TX_PROJECT }}
+          source-file: ${{ env.TX_SOURCE_FILE }}
+          tx-file-format: ${{ env.TX_FILE_FORMAT }}
