@@ -322,7 +322,7 @@ jobs:
 
       - name: Upload Trivy scan results
         if: inputs.trivy-scan && !cancelled()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v4.37.4
         continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
