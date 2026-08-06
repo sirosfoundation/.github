@@ -154,10 +154,24 @@ on:
         type: boolean
         required: false
         default: false
+      sigsum-sign:
+        description: 'Sign the image digest with Ed25519 (YubiHSM2) and submit to Sigsum. Requires self-hosted signer runner.'
+        type: boolean
+        required: false
+        default: false
+      sigsum-policy:
+        description: 'Sigsum trust policy name'
+        type: string
+        required: false
+        default: 'sigsum-generic-2025'
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      pushed: ${{ steps.push-gate.outputs.push }}
+      image-tags: ${{ steps.dispatch-tag.outputs.tags || steps.meta-custom.outputs.tags || steps.meta-standard.outputs.tags }}
     # Trust gate: run automatically for pushes, tags, dispatches, and same-repo PRs.
     # Fork PRs require the 'safe-to-build' label (only org members can apply it).
     # Fork PRs NEVER get images pushed, even with push-pr-images enabled.
@@ -327,3 +341,43 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container
+
+  # --- Sigsum image digest signing ---
+  # Signs the pushed image digest with Ed25519 (YubiHSM2) and submits to Sigsum.
+  # Runs on the self-hosted signer runner. Only runs for pushed images (not PR builds).
+  # The proof artifact can be used for offline verification by anyone with the public key.
+  sign-image:
+    needs: build-and-push
+    if: >-
+      inputs.sigsum-sign
+      && needs.build-and-push.outputs.pushed == 'true'
+      && needs.build-and-push.outputs.digest != ''
+      && github.event_name != 'pull_request'
+    runs-on: [self-hosted, signer]
+
+    steps:
+      - name: Sign image digest and submit to Sigsum
+        run: |
+          # The image digest from docker/build-push-action is "sha256:<hex>"
+          DIGEST="${{ needs.build-and-push.outputs.digest }}"
+          DIGEST_HEX="${DIGEST#sha256:}"
+
+          echo "Signing image digest: $DIGEST"
+          echo "Image: ${{ inputs.image-name }}"
+
+          # sigsum-submit --raw-hash takes a 64-char hex string (32 bytes),
+          # signs it with the Ed25519 key via ssh-agent (backed by YubiHSM2),
+          # and submits to the Sigsum transparency log.
+          echo -n "$DIGEST_HEX" | sigsum-submit --raw-hash \
+            -k "$HOME/.sigsum/signing-key" \
+            -P "${{ inputs.sigsum-policy }}" \
+            -o sigsum-image.proof
+
+          echo "Sigsum proof written"
+
+      - name: Upload Sigsum proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: sigsum-image-proof
+          path: sigsum-image.proof
+          retention-days: 90
