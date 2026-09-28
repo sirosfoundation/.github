@@ -10,7 +10,7 @@ SIROS Foundation builds open source infrastructure for digital identity. Our pla
 
 | Component | Repository | Description |
 |-----------|-----------|-------------|
-| **Wallet Frontend** | [wallet-frontend](https://github.com/wwWallet/wallet-frontend) · [wallet-companion](https://github.com/sirosfoundation/wallet-companion) | React PWA (SPA) and browser extension — runs on user device |
+| **Wallet Frontend** | [wallet-frontend](https://github.com/sirosfoundation/wallet-frontend) · [wallet-companion](https://github.com/sirosfoundation/wallet-companion) | React PWA (SPA) and browser extension — runs on user device |
 | **Wallet Backend** | [go-wallet-backend](https://github.com/sirosfoundation/go-wallet-backend) | Go backend with WebAuthn, credential storage, OID4VCI/OID4VP |
 | **Native SDKs** | [siros-sdk-kotlin](https://github.com/sirosfoundation/siros-sdk-kotlin) · [siros-sdk-swift](https://github.com/sirosfoundation/siros-sdk-swift) | Android and iOS SDKs for embedding wallet capabilities in native apps |
 | **Issuer & Verifier** | [SUNET/vc](https://github.com/SUNET/vc) | Credential issuance (OID4VCI) and verification (OID4VP, OIDC, DC API) |
