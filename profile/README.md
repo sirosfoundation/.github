@@ -6,13 +6,18 @@ SIROS Foundation builds open source infrastructure for digital identity. Our pla
   <img alt="SIROS ID Platform Architecture" src="https://developers.siros.org/img/architecture-overview.svg" width="100%">
 </picture>
 
+<picture>
+  <img alt="SIROS wallet layers: sample apps over the SDK orchestration layer, and wrapper apps hosting wallet-frontend, over shared SDK capability modules, Rust libraries and the platform" src="https://developers.siros.org/img/wallet-layers.svg" width="100%">
+</picture>
+
 ### Platform Components
 
 | Component | Repository | Description |
 |-----------|-----------|-------------|
-| **Wallet Frontend** | [wallet-frontend](https://github.com/sirosfoundation/wallet-frontend) · [wallet-companion](https://github.com/sirosfoundation/wallet-companion) | React PWA (SPA) and browser extension — runs on user device |
+| **Web Wallet** | [wallet-frontend](https://github.com/sirosfoundation/wallet-frontend) · [wallet-companion](https://github.com/sirosfoundation/wallet-companion) | React PWA wallet and browser extension — runs on the user device |
+| **Wrapper Apps** | [wallet-android-wrapper](https://github.com/sirosfoundation/wallet-android-wrapper) · [wallet-ios-wrapper](https://github.com/sirosfoundation/wallet-ios-wrapper) | Android and iOS apps that host wallet-frontend in a WebView and add native capabilities |
 | **Wallet Backend** | [go-wallet-backend](https://github.com/sirosfoundation/go-wallet-backend) | Go backend with WebAuthn, credential storage, OID4VCI/OID4VP |
-| **Native SDKs** | [siros-sdk-kotlin](https://github.com/sirosfoundation/siros-sdk-kotlin) · [siros-sdk-swift](https://github.com/sirosfoundation/siros-sdk-swift) | Android and iOS SDKs for embedding wallet capabilities in native apps |
+| **Native SDKs** | [siros-sdk-kotlin](https://github.com/sirosfoundation/siros-sdk-kotlin) · [siros-sdk-swift](https://github.com/sirosfoundation/siros-sdk-swift) | Android and iOS libraries for building native wallet apps, or for adding native capabilities to an app that hosts the web wallet |
 | **Issuer & Verifier** | [SUNET/vc](https://github.com/SUNET/vc) | Credential issuance (OID4VCI) and verification (OID4VP, OIDC, DC API) |
 | **Trust Services** | [go-trust](https://github.com/sirosfoundation/go-trust) | AuthZEN PDP — ETSI TSL, LoTE, OpenID Federation, DID:web/webvh |
 | **Trust Ecosystem** | [g119612](https://github.com/sirosfoundation/g119612) · [goFF](https://github.com/sirosfoundation/goFF) · [go-spocp](https://github.com/sirosfoundation/go-spocp) | Trust list tooling, OpenID Federation, access control |
