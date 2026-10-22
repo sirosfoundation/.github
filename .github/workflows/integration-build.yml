@@ -1,0 +1,142 @@
+# Reusable workflow: build and publish an integration branch ("bag of PRs") - but only if it verifies.
+# https://github.com/sirosfoundation/.github  (docs/integration-branches.md)
+#
+# An integration/<name> branch is generated from .integration/plan.yaml. This workflow:
+#   1. verifies the branch against its plan (a hand edit, patch or hidden change fails the build); glue is classified
+#      (resolution-only vs new code) in the log
+#   2. builds and pushes ghcr.io/<image-name>:<branch>-<sha7> through docker-build-push.yml (Buildx, Trivy, cache)
+#   3. posts/updates ONE comment on each participating PR (marker comment, edited in place): the branch, the image digest, the
+#      other PRs it was combined with. Skipped when the plan says `ephemeral: true`.
+#
+# Images contain UNMERGED code: never `latest`, pin consumers by DIGEST, re-pin to a release when the PRs land.
+#
+# Usage (see workflow-templates/integration.yml):
+#
+#   on:
+#     push:
+#       branches: ['integration/**']
+#   jobs:
+#     integration:
+#       uses: sirosfoundation/.github/.github/workflows/integration-build.yml@main
+#       permissions:
+#         contents: read
+#         packages: write
+#         security-events: write
+#       with:
+#         image-name: sirosfoundation/integration/my-service
+#       secrets:
+#         comment-token: ${{ secrets.INTEGRATION_COMMENT_TOKEN }}   # optional; needed to comment on PRs in OTHER repos
+name: Build Integration Branch
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: 'GHCR image name without registry prefix (e.g. sirosfoundation/integration/vc-apigw)'
+        type: string
+        required: true
+      dockerfile:
+        type: string
+        required: false
+        default: './Dockerfile'
+      context:
+        type: string
+        required: false
+        default: '.'
+      build-args:
+        description: 'Docker build arguments (multiline KEY=VALUE)'
+        type: string
+        required: false
+        default: ''
+      target:
+        description: 'Dockerfile build target'
+        type: string
+        required: false
+        default: ''
+      platforms:
+        type: string
+        required: false
+        default: 'linux/amd64'
+      comment:
+        description: 'Comment on the participating PRs (ignored for an ephemeral plan)'
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      comment-token:
+        description: 'Token allowed to comment on the PRs (needed for PRs in repositories other than this one)'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      ephemeral: ${{ steps.plan.outputs.ephemeral }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify the branch against its plan
+        uses: sirosfoundation/.github/actions/integration@main
+        with:
+          command: verify
+          args: --tip HEAD
+          token: ${{ secrets.comment-token || github.token }}
+
+      - name: Plan facts
+        id: plan
+        run: |
+          set -euo pipefail
+          if grep -Eq '^ephemeral: *true' .integration/plan.yaml; then echo "ephemeral=true" >> "$GITHUB_OUTPUT"; else echo "ephemeral=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          SLUG=$(echo "$REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')
+          echo "tag=${SLUG}-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
+    with:
+      image-name: ${{ inputs.image-name }}
+      dockerfile: ${{ inputs.dockerfile }}
+      context: ${{ inputs.context }}
+      build-args: ${{ inputs.build-args }}
+      target: ${{ inputs.target }}
+      platforms: ${{ inputs.platforms }}
+      custom-ref: ${{ github.ref }}
+      custom-tag: ${{ needs.verify.outputs.tag }}
+
+  comment:
+    needs: [verify, build]
+    if: inputs.comment && needs.verify.outputs.ephemeral != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Comment on the participating PRs
+        uses: sirosfoundation/.github/actions/integration@main
+        with:
+          command: comment
+          args: >-
+            --tip HEAD
+            --branch ${{ github.ref_name }}
+            --branch-repo ${{ github.repository }}
+            --image ghcr.io/${{ inputs.image-name }}@${{ needs.build.outputs.digest }}
+            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          token: ${{ secrets.comment-token || github.token }}
