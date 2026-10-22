@@ -1,0 +1,6 @@
+{
+  "name": "Integration branch (bag of PRs)",
+  "description": "Verify an integration/** branch against its plan, publish an image to GHCR and cross-reference the participating PRs.",
+  "iconName": "docker",
+  "categories": ["Docker", "continuous-integration"]
+}

@@ -154,10 +154,21 @@ on:
         type: boolean
         required: false
         default: false
+      target:
+        description: 'Dockerfile build target (docker build --target); empty builds the last stage'
+        type: string
+        required: false
+        default: ''
+    outputs:
+      digest:
+        description: 'Digest of the pushed image (sha256:...); empty when nothing was pushed'
+        value: ${{ jobs.build-and-push.outputs.digest }}
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     # Trust gate: run automatically for pushes, tags, dispatches, and same-repo PRs.
     # Fork PRs require the 'safe-to-build' label (only org members can apply it).
     # Fork PRs NEVER get images pushed, even with push-pr-images enabled.
@@ -259,6 +270,7 @@ jobs:
           tags: ${{ steps.dispatch-tag.outputs.tags || steps.meta-custom.outputs.tags || steps.meta-standard.outputs.tags }}
           labels: ${{ steps.meta-custom.outputs.labels || steps.meta-standard.outputs.labels }}
           build-args: ${{ inputs.build-args }}
+          target: ${{ inputs.target }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -274,6 +286,7 @@ jobs:
           load: true
           tags: ${{ inputs.image-name }}:trivy-scan
           build-args: ${{ inputs.build-args }}
+          target: ${{ inputs.target }}
           cache-from: type=gha
 
       - name: Determine Trivy scan target

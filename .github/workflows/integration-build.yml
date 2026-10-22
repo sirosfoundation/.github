@@ -1,0 +1,101 @@
+# Reusable workflow: build and publish an integration branch ("bag of PRs") - but only if it verifies.
+# https://github.com/sirosfoundation/.github  (docs/integration-branches.md)
+#
+# An integration/<name> branch is generated from .integration/plan.yaml. This workflow:
+#   1. verifies the branch against its plan (a hand edit, patch or hidden change fails the build); glue is classified
+#      (resolution-only vs new code) in the log
+#   2. builds and pushes ghcr.io/<image-name>:<branch>-<sha7> through docker-build-push.yml (Buildx, Trivy, cache)
+#   (Cross-reference comments on the participating PRs are a follow-up, deliberately not part of this version.)
+#
+# Images contain UNMERGED code: never `latest`, pin consumers by DIGEST, re-pin to a release when the PRs land.
+#
+# Usage (see workflow-templates/integration.yml):
+#
+#   on:
+#     push:
+#       branches: ['integration/**']
+#   jobs:
+#     integration:
+#       uses: sirosfoundation/.github/.github/workflows/integration-build.yml@main
+#       permissions:
+#         contents: read
+#         packages: write
+#         security-events: write
+#       with:
+#         image-name: sirosfoundation/integration/my-service
+name: Build Integration Branch
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: 'GHCR image name without registry prefix (e.g. sirosfoundation/integration/vc-apigw)'
+        type: string
+        required: true
+      dockerfile:
+        type: string
+        required: false
+        default: './Dockerfile'
+      context:
+        type: string
+        required: false
+        default: '.'
+      build-args:
+        description: 'Docker build arguments (multiline KEY=VALUE)'
+        type: string
+        required: false
+        default: ''
+      target:
+        description: 'Dockerfile build target'
+        type: string
+        required: false
+        default: ''
+      platforms:
+        type: string
+        required: false
+        default: 'linux/amd64'
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify the branch against its plan
+        uses: sirosfoundation/.github/actions/integration@main
+        with:
+          command: verify
+          args: --tip HEAD
+          token: ${{ github.token }}
+
+      - name: Tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          SLUG=$(echo "$REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')
+          echo "tag=${SLUG}-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
+    with:
+      image-name: ${{ inputs.image-name }}
+      dockerfile: ${{ inputs.dockerfile }}
+      context: ${{ inputs.context }}
+      build-args: ${{ inputs.build-args }}
+      target: ${{ inputs.target }}
+      platforms: ${{ inputs.platforms }}
+      custom-ref: ${{ github.ref }}
+      custom-tag: ${{ needs.verify.outputs.tag }}

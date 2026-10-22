@@ -1,0 +1,29 @@
+name: Integration tool tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'actions/integration/**'
+      - '.github/workflows/integration-*.yml'
+      - '.github/workflows/docker-build-push.yml'
+  pull_request:
+    paths:
+      - 'actions/integration/**'
+      - '.github/workflows/integration-*.yml'
+      - '.github/workflows/docker-build-push.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m pip install --quiet pyyaml
+      - run: python3 -m unittest discover -s actions/integration/tests -v
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color .github/workflows/integration-build.yml .github/workflows/integration-tests.yml .github/workflows/docker-build-push.yml
