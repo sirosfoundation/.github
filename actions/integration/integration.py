@@ -5,7 +5,7 @@ An `integration/<name>` branch is GENERATED from a plan that lives in the branch
 
     version: 1
     base: {repo: SUNET/vc, ref: main}
-    ephemeral: false                 # true: an ad-hoc test (no PR comments)
+    ephemeral: false                 # true: an ad-hoc test (reserved: used by the comments follow-up)
     steps:
       - merge: SUNET/vc#839          # a PR head, merged --no-ff; `@sha` pins the head
       - rebase: {pr: SUNET/vc#831}   # the PR's own commits cherry-picked onto the current tip (automatic only)
@@ -19,7 +19,6 @@ Commands (all take --path, a clone of the repository holding the branch):
     sync    --branch B --plan FILE|--from TIP   (re)create the branch from a plan (fetches PR heads), lock it, commit the plan
     verify  --tip B                             regenerate from the locked plan and require the same tree; classify glue
     report  --tip B [--json|--summary]          what is in it: base, the steps, PR metadata, glue classification
-    comment --tip B --image REF [--run-url U]   one marker comment per PR, edited in place   (--retire when the branch goes)
 
 `verify` is the guarantee: the tip's tree (ignoring `.integration/`) must equal the replay of the plan, so no hand edit,
 patch commit or change hidden in a merge commit can be on the branch. A glue branch is the only place a conflict may be
@@ -38,7 +37,6 @@ import tempfile
 from pathlib import Path
 
 PLAN = ".integration/plan.yaml"
-MARKER = "<!-- siros-integration:{repo}:{branch} -->"
 
 
 def git(path, *args, check=True, input=None):
@@ -231,8 +229,10 @@ def sync(path, branch, plan, url_for=ssh_url, push_to=None):
 
 
 def fetch_head_ref(path, repo, ref, url_for):
+    """The base: a branch name, or a full 40-hex commit (a reproducible base)."""
     name = f"refs/integration/base_{repo.replace('/', '_')}_{re.sub(r'[^\w.-]', '_', ref)}"
-    fetched = git(path, "fetch", "-q", url_for(repo), f"+refs/heads/{ref}:{name}", check=False)
+    src = ref if re.fullmatch(r"[0-9a-f]{40}", ref) else f"refs/heads/{ref}"
+    fetched = git(path, "fetch", "-q", url_for(repo), f"+{src}:{name}", check=False)
     if fetched.returncode != 0:
         raise SystemExit(f"cannot fetch the base {repo}@{ref}: {fetched.stderr.strip()}")
     return git(path, "rev-parse", name).stdout.strip()
@@ -310,7 +310,7 @@ def legacy_problems(path, tip, base_ref):
     return out
 
 
-# --- report / comment ---------------------------------------------------------------------------------------------------
+# --- report -------------------------------------------------------------------------------------------------------------
 
 def gh_json(args, run=subprocess.run):
     out = run(["gh", "api", *args], capture_output=True, text=True)
@@ -348,58 +348,13 @@ def report(path, tip, run=subprocess.run, with_api=True):
     return {"base": plan["base"], "base_sha": locked["base_sha"], "ephemeral": bool(plan.get("ephemeral")), "steps": steps}
 
 
-def comment_body(rep, branch_repo, branch, image, run_url, pr):
-    others = [f"{s['repo']}#{s['ref']}" for s in rep["steps"] if s["kind"] != "glue" and (s["repo"], s["ref"]) != pr]
-    glue = [f"`{s['repo']}:{s['ref']}`" for s in rep["steps"] if s["kind"] == "glue"]
-    lines = [MARKER.format(repo=branch_repo, branch=branch),
-             f"**Included in the integration branch `{branch_repo}:{branch}`** (a test build combining several unmerged PRs; "
-             "nothing here is a release).",
-             "",
-             f"- image: `{image}`" if image else "- image: (not built yet)",
-             f"- base: {rep['base']['repo']}@{rep['base']['ref']} `{rep['base_sha'][:9]}`"]
-    if others:
-        lines.append("- together with: " + ", ".join(others))
-    if glue:
-        lines.append("- glue (conflict resolutions): " + ", ".join(glue))
-    if run_url:
-        lines.append(f"- built by {run_url}")
-    lines += ["", "_Updated automatically; edited in place on every rebuild._"]
-    return "\n".join(lines)
-
-
-def upsert_comment(repo, number, body, marker, run=subprocess.run):
-    comments = gh_json([f"repos/{repo}/issues/{number}/comments", "--paginate"], run) or []
-    mine = next((c for c in comments if marker in (c.get("body") or "")), None)
-    if mine:
-        run(["gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{mine['id']}", "-f", f"body={body}"], capture_output=True, text=True)
-        return "updated"
-    run(["gh", "api", "-X", "POST", f"repos/{repo}/issues/{number}/comments", "-f", f"body={body}"], capture_output=True, text=True)
-    return "created"
-
-
-def comment(path, tip, branch_repo, branch, image, run_url, retire=False, run=subprocess.run, dry_run=False):
-    rep = report(path, tip, run)
-    if rep["ephemeral"]:
-        return [("ephemeral", None)]
-    done = []
-    for s in rep["steps"]:
-        if s["kind"] == "glue":
-            continue
-        body = comment_body(rep, branch_repo, branch, image, run_url, (s["repo"], s["ref"]))
-        if retire:
-            body = body.replace("**Included in the integration branch", "**RETIRED: was included in the integration branch")
-        marker = MARKER.format(repo=branch_repo, branch=branch)
-        done.append((f"{s['repo']}#{s['ref']}", "dry-run" if dry_run else upsert_comment(s["repo"], s["ref"], body, marker, run)))
-    return done
-
-
 def summary(rep):
     return ",".join(f"{s['repo']}#{s['ref']}@{s['locked_head'][:9]}" for s in rep["steps"] if s["kind"] != "glue")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=("sync", "verify", "report", "comment"))
+    ap.add_argument("command", choices=("sync", "verify", "report"))
     ap.add_argument("--path", required=True)
     ap.add_argument("--tip")
     ap.add_argument("--branch")
@@ -411,11 +366,6 @@ def main(argv=None):
     ap.add_argument("--legacy", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--summary", action="store_true")
-    ap.add_argument("--image", default="")
-    ap.add_argument("--run-url", default="")
-    ap.add_argument("--branch-repo", default="")
-    ap.add_argument("--retire", action="store_true")
-    ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     path = Path(args.path)
     url_for = https_url if args.https else ssh_url
@@ -453,9 +403,6 @@ def main(argv=None):
         rep = report(path, args.tip)
         print(summary(rep) if args.summary else json.dumps(rep, indent=2) if args.json else __import__("yaml").safe_dump(rep, sort_keys=False, width=140))
         return 0
-    for name, what in comment(path, args.tip, args.branch_repo or "?", args.branch or args.tip, args.image, args.run_url, args.retire,
-                              dry_run=args.dry_run):
-        print(f"{name}: {what}")
     return 0
 
 

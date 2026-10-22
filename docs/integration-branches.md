@@ -13,7 +13,7 @@ registry. `actions/integration/integration.py` creates, verifies and reports on 
 ```yaml
 version: 1
 base: {repo: SUNET/vc, ref: main}
-ephemeral: false            # true: an ad-hoc test; no comments on the PRs
+ephemeral: false            # true: an ad-hoc test (reserved for the comments follow-up)
 steps:
   - merge: SUNET/vc#839                       # merge the PR head (--no-ff); owner/repo#N[@sha] (the sha pins the head)
   - glue:  {branch: sirosfoundation/vc:glue/839-831, note: resolves the seed_recover conflict}
@@ -35,7 +35,7 @@ the conflicting PRs and commits the resolution), and the plan names it in a `glu
 `verify` classifies every glue branch:
 
 - **resolution-only**: every added line already exists in the tip before it, the base or one of the plan's PR heads. It only
-  chooses between existing code, so it needs no review and no PR. It is listed in the PR comments as "no new lines".
+  chooses between existing code, so it needs no review and no PR. It is reported as "no new lines".
 - **new code**: it adds lines found nowhere else. It is a change like any other: give it a draft PR and have it reviewed.
   `verify` prints `glue <branch>: new code (N new lines in <files>)`. A plan marked `ephemeral: true` may skip the PR.
 
@@ -52,20 +52,15 @@ python3 actions/integration/integration.py report --path <clone> --tip integrati
 Add the workflow template **Integration branch (bag of PRs)** to a repository (Actions -> New workflow). On every push to
 `integration/**` it:
 1. runs `verify` (a branch that fails is not built);
-2. builds and pushes `ghcr.io/<image-name>:<branch>-<sha7>` via `docker-build-push.yml` (Buildx, cache, Trivy);
-3. posts or updates **one comment per participating PR**, marked `<!-- siros-integration:<repo>:<branch> -->` and edited in place: the
-   branch, the image digest, the other PRs it was combined with, the glue branches, the run URL. The links create backlinks on the
-   PRs both ways. Nothing is posted for an `ephemeral` plan.
+2. builds and pushes `ghcr.io/<image-name>:<branch>-<sha7>` via `docker-build-push.yml` (Buildx, cache, Trivy); the digest is in the run output.
 
-Commenting on a PR in another repository (an upstream) needs the `INTEGRATION_COMMENT_TOKEN` secret: a token of a bot account (or app)
-that may comment there. Without it the comment step uses the workflow's own `GITHUB_TOKEN`, which can comment only in this repository.
+Cross-reference comments on the participating PRs are a planned follow-up; this version does not post any.
 
 ## Rules for consumers
 These images contain UNMERGED code. Never use `latest`; pin by **digest** (the build summary prints it); re-pin to a release when the PRs
 land. `report --json` gives each PR's state and whether its head moved since the build (the branch is then stale).
 
 ## Limits (v1)
-- The comments are not retired when the branch is deleted (the plan is gone with it); `comment --retire` works while it exists.
 - A rebase step needs its locked head to still be fetchable (a force-pushed-away PR head cannot be replayed); merge and glue steps always can,
   because their heads are in the branch's own history.
 - Fetching other repositories' PR heads is over https: public repositories only.

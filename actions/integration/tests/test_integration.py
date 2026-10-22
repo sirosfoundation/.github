@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """actions/integration/integration.py against real git repositories (the "remotes" are local repos with refs/pull/N/head)."""
-import json
 import os
 import subprocess
 import sys
@@ -218,53 +217,6 @@ class Report(Case):
         subprocess.run(["git", "-C", str(self.clone), *a], check=True, env=ENV, capture_output=True)
 
 
-class Comments(Case):
-    def fake_gh(self, existing):
-        calls = []
-
-        def run(cmd, **kw):
-            calls.append(cmd)
-            if "comments" in cmd[-2:] or (len(cmd) > 2 and cmd[2].endswith("/comments")) or "--paginate" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(existing), stderr="")
-            if any("/pulls/" in c for c in cmd):
-                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"state": "open", "title": "t", "draft": False,
-                                                                              "head": {"sha": "a" * 40}, "labels": []}), stderr="")
-            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
-        return run, calls
-
-    def test_one_marker_comment_per_pr_is_created_then_edited_in_place(self):
-        self.remote.pr(1, "one.txt", "1\n")
-        self.remote.pr(2, "two.txt", "2\n")
-        self.sync([{"merge": "o/r#1"}, {"merge": "o/r#2"}])
-        marker = integration.MARKER.format(repo="o/b", branch="integration/x")
-        run, calls = self.fake_gh([])
-        done = integration.comment(self.clone, "integration/x", "o/b", "integration/x", "ghcr.io/o/i@sha256:abc", "https://run", run=run)
-        self.assertEqual([d[1] for d in done], ["created", "created"])
-        posts = [c for c in calls if "POST" in c]
-        self.assertEqual(len(posts), 2)
-        body = next(a for a in posts[0] if a.startswith("body="))
-        self.assertIn(marker, body)
-        self.assertIn("ghcr.io/o/i@sha256:abc", body)
-        self.assertIn("together with: o/r#2", body)
-        run2, calls2 = self.fake_gh([{"id": 9, "body": marker + " old"}])
-        done2 = integration.comment(self.clone, "integration/x", "o/b", "integration/x", "ghcr.io/o/i@sha256:def", "", run=run2)
-        self.assertEqual([d[1] for d in done2], ["updated", "updated"])
-        self.assertTrue(any("PATCH" in c and "issues/comments/9" in " ".join(c) for c in calls2))
-
-    def test_an_ephemeral_plan_posts_nothing(self):
-        self.remote.pr(1, "one.txt", "1\n")
-        self.sync([{"merge": "o/r#1"}], ephemeral=True)
-        run, calls = self.fake_gh([])
-        self.assertEqual(integration.comment(self.clone, "integration/x", "o/b", "integration/x", "img", "", run=run), [("ephemeral", None)])
-        self.assertFalse([c for c in calls if "POST" in c or "PATCH" in c])
-
-    def test_retire_marks_the_comment(self):
-        self.remote.pr(1, "one.txt", "1\n")
-        self.sync([{"merge": "o/r#1"}])
-        run, calls = self.fake_gh([])
-        integration.comment(self.clone, "integration/x", "o/b", "integration/x", "", "", retire=True, run=run)
-        body = next(a for c in calls if "POST" in c for a in c if a.startswith("body="))
-        self.assertIn("RETIRED", body)
 
 
 if __name__ == "__main__":

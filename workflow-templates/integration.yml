@@ -1,5 +1,5 @@
 # Builds an integration branch ("bag of PRs") when integration/** is pushed - and only if it verifies against its plan
-# (.integration/plan.yaml). Publishes ghcr.io/<image-name>:<branch>-<sha7> and comments on the participating PRs.
+# (.integration/plan.yaml). Publishes ghcr.io/<image-name>:<branch>-<sha7>.
 # See https://github.com/sirosfoundation/.github/blob/main/docs/integration-branches.md
 name: Integration
 
@@ -16,5 +16,3 @@ jobs:
       security-events: write
     with:
       image-name: sirosfoundation/integration/${{ github.event.repository.name }}
-    secrets:
-      comment-token: ${{ secrets.INTEGRATION_COMMENT_TOKEN }}

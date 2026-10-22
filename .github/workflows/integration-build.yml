@@ -5,8 +5,7 @@
 #   1. verifies the branch against its plan (a hand edit, patch or hidden change fails the build); glue is classified
 #      (resolution-only vs new code) in the log
 #   2. builds and pushes ghcr.io/<image-name>:<branch>-<sha7> through docker-build-push.yml (Buildx, Trivy, cache)
-#   3. posts/updates ONE comment on each participating PR (marker comment, edited in place): the branch, the image digest, the
-#      other PRs it was combined with. Skipped when the plan says `ephemeral: true`.
+#   (Cross-reference comments on the participating PRs are a follow-up, deliberately not part of this version.)
 #
 # Images contain UNMERGED code: never `latest`, pin consumers by DIGEST, re-pin to a release when the PRs land.
 #
@@ -24,8 +23,6 @@
 #         security-events: write
 #       with:
 #         image-name: sirosfoundation/integration/my-service
-#       secrets:
-#         comment-token: ${{ secrets.INTEGRATION_COMMENT_TOKEN }}   # optional; needed to comment on PRs in OTHER repos
 name: Build Integration Branch
 
 on:
@@ -57,16 +54,6 @@ on:
         type: string
         required: false
         default: 'linux/amd64'
-      comment:
-        description: 'Comment on the participating PRs (ignored for an ephemeral plan)'
-        type: boolean
-        required: false
-        default: true
-    secrets:
-      comment-token:
-        description: 'Token allowed to comment on the PRs (needed for PRs in repositories other than this one)'
-        required: false
-
 permissions:
   contents: read
 
@@ -75,7 +62,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
-      ephemeral: ${{ steps.plan.outputs.ephemeral }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -86,13 +72,7 @@ jobs:
         with:
           command: verify
           args: --tip HEAD
-          token: ${{ secrets.comment-token || github.token }}
-
-      - name: Plan facts
-        id: plan
-        run: |
-          set -euo pipefail
-          if grep -Eq '^ephemeral: *true' .integration/plan.yaml; then echo "ephemeral=true" >> "$GITHUB_OUTPUT"; else echo "ephemeral=false" >> "$GITHUB_OUTPUT"; fi
+          token: ${{ github.token }}
 
       - name: Tag
         id: tag
@@ -119,24 +99,3 @@ jobs:
       platforms: ${{ inputs.platforms }}
       custom-ref: ${{ github.ref }}
       custom-tag: ${{ needs.verify.outputs.tag }}
-
-  comment:
-    needs: [verify, build]
-    if: inputs.comment && needs.verify.outputs.ephemeral != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Comment on the participating PRs
-        uses: sirosfoundation/.github/actions/integration@main
-        with:
-          command: comment
-          args: >-
-            --tip HEAD
-            --branch ${{ github.ref_name }}
-            --branch-repo ${{ github.repository }}
-            --image ghcr.io/${{ inputs.image-name }}@${{ needs.build.outputs.digest }}
-            --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          token: ${{ secrets.comment-token || github.token }}
