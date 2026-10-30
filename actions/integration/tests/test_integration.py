@@ -227,6 +227,36 @@ class Report(Case):
         subprocess.run(["git", "-C", str(self.clone), *a], check=True, env=ENV, capture_output=True)
 
 
+class NoIdentity(Case):
+    """A CI runner has no git identity and a developer's config may sign: neither may break or stall a replay."""
+
+    def test_sync_and_verify_work_without_any_git_identity_or_signing_config(self):
+        self.remote.pr(1, "one.txt", "1\n")
+        self.remote.pr(2, "two.txt", "2\n")
+        gone = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith(("GIT_AUTHOR", "GIT_COMMITTER", "EMAIL"))}
+        home = tempfile.mkdtemp()
+        env_keep = {k: os.environ.get(k) for k in ("HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM")}
+        os.environ.update({"HOME": home, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"})
+        try:
+            self.sync([{"merge": "o/r#1"}, {"merge": "o/r#2"}])
+            self.assertTrue(integration.verify(self.clone, "integration/x", self.url)["ok"])
+        finally:
+            os.environ.update(gone)
+            for k, v in env_keep.items():
+                os.environ[k] = v
+
+    def test_a_failure_that_is_not_a_conflict_is_not_called_one(self):
+        self.remote.pr(1, "one.txt", "1\n")
+        hooks = self.clone / ".git" / "hooks"
+        hooks.mkdir(exist_ok=True)
+        (hooks / "pre-merge-commit").write_text("#!/bin/sh\necho refused by a hook >&2\nexit 1\n")
+        (hooks / "pre-merge-commit").chmod(0o755)
+        with self.assertRaises(SystemExit) as cm:
+            self.sync([{"merge": "o/r#1"}])
+        self.assertIn("failed", str(cm.exception))
+        self.assertNotIn("conflicts with", str(cm.exception))
+
+
 class PlanV2(Case):
     """Branch sources, pick steps and the version gate."""
 

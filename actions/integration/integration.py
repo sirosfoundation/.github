@@ -50,9 +50,16 @@ from pathlib import Path
 PLAN = ".integration/plan.yaml"
 
 
+# Every commit the tool creates (merge commits, cherry-picks, the plan) has this author and committer and is NOT signed: a CI runner has
+# no git identity (a merge would fail with "Committer identity unknown", which looked like a conflict) and a developer's own config may sign
+# commits (a replay must never wait for a card). Only trees are compared, so the hashes of a replay need not match the build's.
+IDENTITY = ["-c", "user.name=integration.py", "-c", "user.email=integration@users.noreply.github.com", "-c", "commit.gpgsign=false",
+            "-c", "tag.gpgsign=false"]
+
+
 def git(path, *args, check=True, input=None):
     # errors="replace": a repository holds binary files (a gzip fixture, an image) and git prints them back; novelty is judged on text lines
-    out = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, errors="replace", input=input)
+    out = subprocess.run(["git", *IDENTITY, "-C", str(path), *args], capture_output=True, text=True, errors="replace", input=input)
     if check and out.returncode != 0:
         raise SystemExit(f"git {' '.join(args)}: {out.stderr.strip() or out.stdout.strip()}")
     return out
@@ -279,9 +286,12 @@ def replay(path, plan, resolve, branch, base_sha, commits_of=None):
                 text += f": {note}"
             merged = git(path, "merge", "--no-ff", "-m", text, head, check=False)
             if merged.returncode != 0:
+                conflicted = git(path, "diff", "--name-only", "--diff-filter=U").stdout.split()
                 git(path, "merge", "--abort", check=False)
-                raise SystemExit(f"{label} @{head[:9]} conflicts with what is already on {branch}. A conflict is resolved on a "
-                                 f"glue branch that goes into the plan (a `glue` step before this one), never by hand: "
+                if not conflicted:                      # not a conflict: say what git said
+                    raise SystemExit(f"merging {label} @{head[:9]} into {branch} failed: {(merged.stderr or merged.stdout).strip()[:300]}")
+                raise SystemExit(f"{label} @{head[:9]} conflicts with what is already on {branch} ({', '.join(conflicted[:5])}). A conflict is "
+                                 f"resolved on a glue branch that goes into the plan (a `glue` step before this one), never by hand: "
                                  f"{merged.stdout.strip()[:300]}")
         entry = {"step": i, "kind": kind, "head": head, "tip_before": before}
         if kind == "glue":
