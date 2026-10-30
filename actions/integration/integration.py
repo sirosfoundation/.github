@@ -1,28 +1,39 @@
 #!/usr/bin/env python3
-"""Integration branches: a documented, reproducible "bag of PRs".
+"""Integration branches: a documented, reproducible "bag of changes", and what is built from it.
 
 An `integration/<name>` branch is GENERATED from a plan that lives in the branch itself, `.integration/plan.yaml`:
 
-    version: 1
-    base: {repo: SUNET/vc, ref: main}
-    ephemeral: false                 # true: an ad-hoc test (reserved: used by the comments follow-up)
-    steps:
-      - merge: SUNET/vc#839          # a PR head, merged --no-ff; `@sha` pins the head
-      - rebase: {pr: SUNET/vc#831}   # the PR's own commits cherry-picked onto the current tip (automatic only)
+    version: 2
+    base: {repo: SUNET/vc, ref: main}   # a branch, or a full 40-hex commit (a reproducible base)
+    ephemeral: false                    # true: an ad-hoc test (reserved: used by the comments follow-up)
+    steps:                              # a SOURCE is a PR `owner/repo#N[@sha]` or a branch `owner/repo:branch[@sha]`
+      - merge: SUNET/vc#839             # the source's head, merged --no-ff; `@sha` pins the head
+      - merge: sirosfoundation/vc:docs/operator        # a branch of a fork is a source as well
+      - rebase: SUNET/vc#831            # the source's own commits cherry-picked onto the current tip (automatic only)
+      - pick: {from: sirosfoundation/vc:fix/logs, commits: [5da879895]}   # exactly these commits (reachable from the source)
       - glue: {branch: sirosfoundation/vc:glue/839-831, note: resolves seed_recover}   # a branch resolving a conflict
-    locked:                          # written by `sync`: exactly what was built; `verify` replays these
+    builds:                             # what the workflow builds from the branch (see below); optional
+      - {name: apigw, kind: docker, image: sirosfoundation/integration/vc-apigw, build_args: [SERVICE_NAME=apigw]}
+      - {name: sdk, kind: artifact, runner: ubuntu-latest, run: ./gradlew assembleRelease, outputs: ['**/build/outputs/aar/*.aar']}
+    locked:                             # written by `sync`: exactly what was built; `verify` replays these
       base_sha: <40 hex>
-      steps: [{head: <40 hex>}, ...]
+      steps: [{head: <40 hex>}, {head: <40 hex>, commits: [<40 hex>]}, ...]
+
+Version 1 plans (PR-only merge/rebase, glue) remain valid.
 
 Commands (all take --path, a clone of the repository holding the branch):
 
-    sync    --branch B --plan FILE|--from TIP   (re)create the branch from a plan (fetches PR heads), lock it, commit the plan
+    sync    --branch B --plan FILE|--from TIP   (re)create the branch from a plan (fetches the sources), lock it, commit the plan
     verify  --tip B                             regenerate from the locked plan and require the same tree; classify glue
     report  --tip B [--json|--summary]          what is in it: base, the steps, PR metadata, glue classification
+    builds  --tip B [--json]                    the plan's build targets, validated (the workflow turns them into a matrix)
+
+`--remotes DIR` makes every `owner/repo` a local repository at DIR/owner/repo (offline and tests; the default is GitHub over ssh,
+or https with --https).
 
 `verify` is the guarantee: the tip's tree (ignoring `.integration/`) must equal the replay of the plan, so no hand edit,
 patch commit or change hidden in a merge commit can be on the branch. A glue branch is the only place a conflict may be
-resolved, and it is classified: RESOLUTION-ONLY (every added line already exists in one of the PRs or the base: no review
+resolved, and it is classified: RESOLUTION-ONLY (every added line already exists in one of the sources or the base: no review
 needed) or NEW CODE (lines found nowhere else: it needs a draft PR and review like any change).
 
 A branch without a plan (older ones) is still reported from its history (`report`), and `verify --legacy` checks it the old
@@ -56,29 +67,53 @@ def https_url(repo):
 
 # --- plan ---------------------------------------------------------------------------------------------------------------
 
+PR_RE = r"([\w.-]+/[\w.-]+)#(\d+)(?:@([0-9a-f]{7,40}))?"
+BRANCH_RE = r"([\w.-]+/[\w.-]+):(.+?)(?:@([0-9a-f]{7,40}))?"
+STEP_KINDS = ("merge", "rebase", "pick", "glue")
+BUILD_KINDS = ("docker", "artifact")
+
+
 def parse_pr(spec):
-    m = re.fullmatch(r"([\w.-]+/[\w.-]+)#(\d+)(?:@([0-9a-f]{7,40}))?", str(spec))
+    m = re.fullmatch(PR_RE, str(spec))
     if not m:
         raise SystemExit(f"not a PR reference (owner/repo#N[@sha]): {spec}")
     return m.group(1), int(m.group(2)), m.group(3)
 
 
 def parse_branch(spec):
-    m = re.fullmatch(r"([\w.-]+/[\w.-]+):(.+?)(?:@([0-9a-f]{7,40}))?", str(spec))
+    m = re.fullmatch(BRANCH_RE, str(spec))
     if not m:
         raise SystemExit(f"not a branch reference (owner/repo:branch[@sha]): {spec}")
     return m.group(1), m.group(2), m.group(3)
 
 
+def parse_source(spec):
+    """A PR (owner/repo#N[@sha]) or a branch (owner/repo:branch[@sha]) -> {'kind': 'pr'|'branch', 'repo', 'ref', 'pinned'}."""
+    spec = str(spec)
+    if re.fullmatch(PR_RE, spec):
+        repo, number, sha = parse_pr(spec)
+        return {"kind": "pr", "repo": repo, "ref": number, "pinned": sha}
+    if re.fullmatch(BRANCH_RE, spec):
+        repo, branch, sha = parse_branch(spec)
+        return {"kind": "branch", "repo": repo, "ref": branch, "pinned": sha}
+    raise SystemExit(f"not a source (a PR owner/repo#N[@sha] or a branch owner/repo:branch[@sha]): {spec}")
+
+
 def load_plan(text):
     import yaml
     plan = yaml.safe_load(text)
-    if not isinstance(plan, dict) or plan.get("version") != 1 or not plan.get("steps") or "base" not in plan:
-        raise SystemExit("not a version 1 integration plan (needs base and steps)")
+    if not isinstance(plan, dict) or plan.get("version") not in (1, 2) or not plan.get("steps") or "base" not in plan:
+        raise SystemExit("not a version 1 or 2 integration plan (needs base and steps)")
     for step in plan["steps"]:
-        kinds = [k for k in ("merge", "rebase", "glue") if k in step]
+        kinds = [k for k in STEP_KINDS if k in step]
         if len(kinds) != 1:
-            raise SystemExit(f"a step is exactly one of merge, rebase, glue: {step}")
+            raise SystemExit(f"a step is exactly one of {', '.join(STEP_KINDS)}: {step}")
+        src = step_source(step)                 # refuses a malformed source or commit list
+        if plan["version"] == 1 and (step_kind(step) == "pick" or (src["kind"] == "branch" and step_kind(step) != "glue")):
+            raise SystemExit("a version 1 plan has PR merges and rebases and glue branches only: use version: 2 for pick steps and branch sources")
+    if plan["version"] == 1 and plan.get("builds"):
+        raise SystemExit("builds need version: 2")
+    parse_builds(plan)
     return plan
 
 
@@ -88,32 +123,124 @@ def dump_plan(plan):
 
 
 def step_kind(step):
-    return next(k for k in ("merge", "rebase", "glue") if k in step)
+    return next(k for k in STEP_KINDS if k in step)
+
+
+def step_source(step):
+    """The source of a step: {'kind': 'pr'|'branch', 'repo', 'ref', 'pinned'} (+ 'commits' for a pick)."""
+    kind = step_kind(step)
+    body = step[kind]
+    if kind == "glue":
+        src = parse_source(body["branch"] if isinstance(body, dict) else body)
+        if src["kind"] != "branch":
+            raise SystemExit(f"a glue step names a branch (owner/repo:branch): {body}")
+        return src
+    if kind == "pick":
+        if not isinstance(body, dict) or "from" not in body or not body.get("commits"):
+            raise SystemExit(f"a pick step is {{from: <source>, commits: [<sha>, ...]}}: {step}")
+        src = parse_source(body["from"])
+        commits = [str(c) for c in body["commits"]]
+        for c in commits:
+            if not re.fullmatch(r"[0-9a-f]{7,40}", c):
+                raise SystemExit(f"not a commit sha: {c}")
+        return {**src, "commits": commits}
+    if isinstance(body, dict):                  # rebase: {pr: ...} (version 1) or {from: ...}
+        body = body.get("from", body.get("pr"))
+    return parse_source(body)
 
 
 def step_ref(step):
-    """(kind, repo, ref-or-number, pinned sha) of a step."""
-    kind = step_kind(step)
-    if kind == "merge":
-        repo, number, sha = parse_pr(step["merge"])
-        return kind, repo, number, sha
-    if kind == "rebase":
-        repo, number, sha = parse_pr(step["rebase"]["pr"] if isinstance(step["rebase"], dict) else step["rebase"])
-        return kind, repo, number, sha
-    repo, branch, sha = parse_branch(step["glue"]["branch"] if isinstance(step["glue"], dict) else step["glue"])
-    return kind, repo, branch, sha
+    """(kind, repo, ref, pinned sha) of a step: ref is the PR number or the branch name."""
+    src = step_source(step)
+    return step_kind(step), src["repo"], src["ref"], src["pinned"]
+
+
+def step_label(step):
+    src = step_source(step)
+    return f"{src['repo']}#{src['ref']}" if src["kind"] == "pr" else f"{src['repo']}:{src['ref']}"
+
+
+# --- builds: what the workflow makes of the branch -----------------------------------------------------------------------
+
+BUILD_NAME = r"[a-z0-9][a-z0-9._-]*"
+DOCKER_KEYS = {"name", "kind", "image", "dockerfile", "context", "target", "build_args", "platforms"}
+ARTIFACT_KEYS = {"name", "kind", "runner", "run", "outputs", "env"}
+# GitHub-hosted runners only: a plan is data pushed to a branch and must not be able to pick a self-hosted machine.
+RUNNERS = ("ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04", "macos-latest", "macos-15", "macos-14", "windows-latest")
+
+
+def parse_builds(plan):
+    """Validate and normalise plan['builds'] -> [{'name', 'kind', ...defaults filled}]. A build is data, not code: `docker` names a
+    Dockerfile and its arguments; `artifact` is a shell command whose outputs (globs) are collected (an SDK's AAR or APK, an
+    XCFramework, a package), which is how native-app and SDK builds are expressed. Unknown keys are refused."""
+    out, seen = [], set()
+    for build in plan.get("builds") or []:
+        if not isinstance(build, dict) or build.get("kind") not in BUILD_KINDS:
+            raise SystemExit(f"a build is a mapping with kind one of {', '.join(BUILD_KINDS)}: {build}")
+        name = str(build.get("name", ""))
+        if not re.fullmatch(BUILD_NAME, name) or name in seen:
+            raise SystemExit(f"a build needs a unique name matching {BUILD_NAME}: {name!r}")
+        seen.add(name)
+        allowed = DOCKER_KEYS if build["kind"] == "docker" else ARTIFACT_KEYS
+        extra = set(build) - allowed
+        if extra:
+            raise SystemExit(f"build {name}: unknown keys {sorted(extra)} for kind {build['kind']}")
+        if build["kind"] == "docker":
+            image = str(build.get("image", ""))
+            if not re.fullmatch(r"[a-z0-9][a-z0-9._/-]*", image):
+                raise SystemExit(f"build {name}: image is a GHCR path without registry or tag (e.g. sirosfoundation/integration/vc-apigw)")
+            args = build.get("build_args") or []
+            if isinstance(args, dict):
+                args = [f"{k}={v}" for k, v in args.items()]
+            if not all(isinstance(a, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", a) for a in args):
+                raise SystemExit(f"build {name}: build_args are KEY=VALUE strings or a mapping")
+            out.append({"name": name, "kind": "docker", "image": image, "dockerfile": build.get("dockerfile", "./Dockerfile"),
+                        "context": build.get("context", "."), "target": build.get("target", ""), "build_args": list(args),
+                        "platforms": build.get("platforms", "linux/amd64")})
+        else:
+            outputs = build.get("outputs")
+            if not outputs or not all(isinstance(o, str) and o and not o.startswith("/") and ".." not in o.split("/") for o in outputs):
+                raise SystemExit(f"build {name}: outputs are relative globs (at least one): {outputs}")
+            runner = build.get("runner", "ubuntu-latest")
+            if runner not in RUNNERS:
+                raise SystemExit(f"build {name}: runner is a GitHub-hosted one of {', '.join(RUNNERS)}")
+            run = build.get("run")
+            if not isinstance(run, str) or not run.strip():
+                raise SystemExit(f"build {name}: run is the shell commands that produce the outputs")
+            env = build.get("env") or {}
+            if not isinstance(env, dict) or not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(k)) for k in env):
+                raise SystemExit(f"build {name}: env is a mapping of variable names to values")
+            out.append({"name": name, "kind": "artifact", "runner": runner, "run": run,
+                        "outputs": list(outputs), "env": {str(k): str(v) for k, v in env.items()}})
+    return out
 
 
 # --- replay -------------------------------------------------------------------------------------------------------------
 
-def fetch_head(path, kind, repo, ref, url_for):
-    """Fetch the head of a PR (pull/<n>/head) or a branch into a private ref and return its sha."""
-    name = f"refs/integration/{repo.replace('/', '_')}_{'pr' + str(ref) if kind != 'glue' else re.sub(r'[^\w.-]', '_', ref)}"
-    src = f"pull/{ref}/head" if kind != "glue" else f"refs/heads/{ref}"
-    fetched = git(path, "fetch", "-q", url_for(repo), f"+{src}:{name}", check=False)
+def fetch_head(path, src, url_for):
+    """Fetch the head of a source (a PR's pull/<n>/head, or a branch) into a private ref and return its sha."""
+    repo, ref = src["repo"], src["ref"]
+    tail = f"pr{ref}" if src["kind"] == "pr" else re.sub(r"[^\w.-]", "_", ref)
+    name = f"refs/integration/{repo.replace('/', '_')}_{tail}"
+    remote = f"pull/{ref}/head" if src["kind"] == "pr" else f"refs/heads/{ref}"
+    fetched = git(path, "fetch", "-q", url_for(repo), f"+{remote}:{name}", check=False)
     if fetched.returncode != 0:
-        raise SystemExit(f"cannot fetch {repo} {src}: {fetched.stderr.strip()}")
+        raise SystemExit(f"cannot fetch {repo} {remote}: {fetched.stderr.strip()}")
     return git(path, "rev-parse", name).stdout.strip()
+
+
+def resolve_commits(path, head, commits):
+    """Full shas of a pick's commits; each must be reachable from the source head (a pick takes commits OF that source)."""
+    full = []
+    for c in commits:
+        out = git(path, "rev-parse", "--verify", "-q", f"{c}^{{commit}}", check=False)
+        if out.returncode != 0:
+            raise SystemExit(f"pick: commit {c} is not in the fetched source")
+        sha = out.stdout.strip()
+        if git(path, "merge-base", "--is-ancestor", sha, head, check=False).returncode != 0:
+            raise SystemExit(f"pick: commit {c} is not reachable from the source head {head[:9]}")
+        full.append(sha)
+    return full
 
 
 def has_object(path, sha):
@@ -125,27 +252,27 @@ def pr_commits(path, head, base_sha):
     return git(path, "rev-list", "--reverse", "--no-merges", head, f"^{base_sha}").stdout.split()
 
 
-def replay(path, plan, resolve, branch, base_sha, message=None):
-    """Build `branch` (checked out in `path`) at base_sha by running the plan. `resolve(i, step)` returns the head sha for step i.
-    Returns [{'step', 'kind', 'head', 'tip_before', 'novel_lines' (glue)}]."""
+def replay(path, plan, resolve, branch, base_sha, commits_of=None):
+    """Build `branch` (checked out in `path`) at base_sha by running the plan. `resolve(i, step)` returns the head sha for step i;
+    `commits_of(i, step, head)` the full shas of a pick step. Returns [{'step', 'kind', 'head', 'tip_before', 'novel_lines' (glue)}]."""
     git(path, "checkout", "-q", "-B", branch, base_sha)
     results = []
     heads = [resolve(i, step) for i, step in enumerate(plan["steps"])]
-    pr_heads = [h for h, step in zip(heads, plan["steps"]) if step_kind(step) != "glue"]
+    known_heads = [h for h, step in zip(heads, plan["steps"]) if step_kind(step) != "glue"]
     for i, step in enumerate(plan["steps"]):
-        kind, repo, ref, _ = step_ref(step)
-        head = heads[i]
+        kind, head = step_kind(step), heads[i]
         before = git(path, "rev-parse", "HEAD").stdout.strip()
-        label = f"{repo}#{ref}" if kind != "glue" else f"{repo}:{ref}"
-        if kind == "rebase":
-            for sha in pr_commits(path, head, base_sha):
+        label = step_label(step)
+        if kind in ("rebase", "pick"):
+            shas = pr_commits(path, head, base_sha) if kind == "rebase" else commits_of(i, step, head)
+            for sha in shas:
                 pick = git(path, "cherry-pick", "--allow-empty", "--keep-redundant-commits", sha, check=False)
                 if pick.returncode != 0:
                     git(path, "cherry-pick", "--abort", check=False)
-                    raise SystemExit(f"rebase of {label}: {sha[:9]} does not apply automatically; a conflict needs a glue step, "
+                    raise SystemExit(f"{kind} of {label}: {sha[:9]} does not apply automatically; a conflict needs a glue step, "
                                      f"not a hand edit")
         else:
-            text = f"Merge PR {label} @{head[:9]}" if kind == "merge" else f"Glue {label} @{head[:9]}"
+            text = f"Merge {label} @{head[:9]}" if kind == "merge" else f"Glue {label} @{head[:9]}"
             note = step.get("note") or (step["glue"].get("note") if kind == "glue" and isinstance(step["glue"], dict) else None)
             if note:
                 text += f": {note}"
@@ -157,7 +284,7 @@ def replay(path, plan, resolve, branch, base_sha, message=None):
                                  f"{merged.stdout.strip()[:300]}")
         entry = {"step": i, "kind": kind, "head": head, "tip_before": before}
         if kind == "glue":
-            entry["novel_lines"] = novel_lines(path, before, pr_heads, base_sha)
+            entry["novel_lines"] = novel_lines(path, before, known_heads, base_sha)
         results.append(entry)
     return results
 
@@ -207,18 +334,21 @@ def sync(path, branch, plan, url_for=ssh_url, push_to=None):
         raise SystemExit("the working tree is not clean")
     base_repo, base_ref = plan["base"]["repo"], plan["base"]["ref"]
     base_sha = fetch_head_ref(path, base_repo, base_ref, url_for)
-    heads = []
+    heads, picks = [], {}
 
     def resolve(i, step):
-        kind, repo, ref, pinned = step_ref(step)
-        head = fetch_head(path, kind, repo, ref, url_for)
-        if pinned and not head.startswith(pinned):
-            raise SystemExit(f"{repo} {ref} is {head[:9]}, not the pinned {pinned}: it has moved")
+        src = step_source(step)
+        head = fetch_head(path, src, url_for)
+        if src["pinned"] and not head.startswith(src["pinned"]):
+            raise SystemExit(f"{step_label(step)} is {head[:9]}, not the pinned {src['pinned']}: it has moved")
         heads.append(head)
+        if step_kind(step) == "pick":
+            picks[i] = resolve_commits(path, head, src["commits"])
         return head
 
-    replay(path, plan, resolve, branch, base_sha)
-    locked = {**plan, "locked": {"base_sha": base_sha, "steps": [{"head": h} for h in heads]}}
+    replay(path, plan, resolve, branch, base_sha, commits_of=lambda i, step, head: picks[i])
+    steps_locked = [{"head": h, **({"commits": picks[i]} if i in picks else {})} for i, h in enumerate(heads)]
+    locked = {**plan, "locked": {"base_sha": base_sha, "steps": steps_locked}}
     (path / ".integration").mkdir(exist_ok=True)
     (path / PLAN).write_text(dump_plan(locked))
     git(path, "add", PLAN)
@@ -262,13 +392,14 @@ def verify(path, tip, url_for=ssh_url):
     try:
         def resolve(i, step):
             head = locked["steps"][i]["head"]
-            if not has_object(work, head):                 # a head that is not in the branch's own history (a rebase step)
-                kind, repo, ref, _ = step_ref(step)
-                fetched = fetch_head(work, kind, repo, ref, url_for)
+            needed = [head] + locked["steps"][i].get("commits", [])
+            if not all(has_object(work, o) for o in needed):    # not in the branch's own history (a rebase or pick step)
+                fetched = fetch_head(work, step_source(step), url_for)
                 if fetched != head:
-                    raise SystemExit(f"step {i}: the locked head {head[:9]} is no longer fetchable ({repo} {ref} is now {fetched[:9]})")
+                    raise SystemExit(f"step {i}: the locked head {head[:9]} is no longer fetchable ({step_label(step)} is now {fetched[:9]})")
             return head
-        results = replay(work, plan, resolve, "integration/verify-scratch", locked["base_sha"])
+        results = replay(work, plan, resolve, "integration/verify-scratch", locked["base_sha"],
+                         commits_of=lambda i, step, head: locked["steps"][i]["commits"])
         replayed = tree_without_plan(work, "HEAD")
         actual = tree_without_plan(path, tip_sha)
         if replayed != actual:
@@ -278,7 +409,7 @@ def verify(path, tip, url_for=ssh_url):
         for r in results:
             if r["kind"] == "glue":
                 step = plan["steps"][r["step"]]
-                glue.append({"step": r["step"], "branch": step_ref(step)[2], "head": r["head"],
+                glue.append({"step": r["step"], "branch": step_source(step)["ref"], "head": r["head"],
                              "class": "new code" if r["novel_lines"] else "resolution-only",
                              "new_lines": sum(len(v) for v in r["novel_lines"].values()), "files": sorted(r["novel_lines"])})
     except SystemExit as e:
@@ -337,24 +468,27 @@ def report(path, tip, run=subprocess.run, with_api=True):
     locked = plan["locked"]
     steps = []
     for i, step in enumerate(plan["steps"]):
-        kind, repo, ref, _ = step_ref(step)
-        entry = {"kind": kind, "repo": repo, "ref": ref, "locked_head": locked["steps"][i]["head"]}
-        if kind != "glue" and with_api:
-            info = pr_info(repo, ref, run)
+        kind, src = step_kind(step), step_source(step)
+        entry = {"kind": kind, "repo": src["repo"], "ref": src["ref"], "source": src["kind"], "locked_head": locked["steps"][i]["head"]}
+        if kind == "pick":
+            entry["commits"] = [c[:9] for c in locked["steps"][i]["commits"]]
+        if src["kind"] == "pr" and kind != "glue" and with_api:
+            info = pr_info(src["repo"], src["ref"], run)
             entry.update(info, head_moved=bool(info["head"]) and info["head"] != entry["locked_head"])
         if kind == "glue":
             entry["note"] = step["glue"].get("note") if isinstance(step["glue"], dict) else None
         steps.append(entry)
-    return {"base": plan["base"], "base_sha": locked["base_sha"], "ephemeral": bool(plan.get("ephemeral")), "steps": steps}
+    return {"base": plan["base"], "base_sha": locked["base_sha"], "ephemeral": bool(plan.get("ephemeral")), "steps": steps,
+            "builds": [b["name"] for b in parse_builds(plan)]}
 
 
 def summary(rep):
-    return ",".join(f"{s['repo']}#{s['ref']}@{s['locked_head'][:9]}" for s in rep["steps"] if s["kind"] != "glue")
+    return ",".join(f"{s['repo']}{'#' if s['source'] == 'pr' else ':'}{s['ref']}@{s['locked_head'][:9]}" for s in rep["steps"] if s["kind"] != "glue")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=("sync", "verify", "report"))
+    ap.add_argument("command", choices=("sync", "verify", "report", "builds"))
     ap.add_argument("--path", required=True)
     ap.add_argument("--tip")
     ap.add_argument("--branch")
@@ -362,13 +496,14 @@ def main(argv=None):
     ap.add_argument("--from", dest="source", help="sync: re-lock the plan of this existing branch at the PRs' latest heads")
     ap.add_argument("--push", metavar="REMOTE")
     ap.add_argument("--https", action="store_true", help="fetch over https instead of ssh")
+    ap.add_argument("--remotes", metavar="DIR", help="every owner/repo is a local repository at DIR/owner/repo (offline, tests)")
     ap.add_argument("--base", default="origin/main", help="verify --legacy: what a plan-less branch was built on")
     ap.add_argument("--legacy", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args(argv)
     path = Path(args.path)
-    url_for = https_url if args.https else ssh_url
+    url_for = (lambda repo: str(Path(args.remotes) / repo)) if args.remotes else https_url if args.https else ssh_url
     if args.command == "sync":
         if not args.branch:
             raise SystemExit("sync needs --branch")
@@ -399,6 +534,13 @@ def main(argv=None):
                   file=sys.stderr)
         print("OK" if result["ok"] else "FAILED", file=sys.stderr)
         return 0 if result["ok"] else 1
+    if args.command == "builds":
+        plan = read_plan(path, args.tip)
+        if plan is None:
+            raise SystemExit(f"no {PLAN} on {args.tip}")
+        builds = parse_builds(plan)
+        print(json.dumps({"docker": [b for b in builds if b["kind"] == "docker"], "artifact": [b for b in builds if b["kind"] == "artifact"]}))
+        return 0
     if args.command == "report":
         rep = report(path, args.tip)
         print(summary(rep) if args.summary else json.dumps(rep, indent=2) if args.json else __import__("yaml").safe_dump(rep, sort_keys=False, width=140))

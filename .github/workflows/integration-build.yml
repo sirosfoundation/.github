@@ -1,13 +1,19 @@
-# Reusable workflow: build and publish an integration branch ("bag of PRs") - but only if it verifies.
+# Reusable workflow: build an integration branch ("bag of changes") - but only if it verifies.
 # https://github.com/sirosfoundation/.github  (docs/integration-branches.md)
 #
 # An integration/<name> branch is generated from .integration/plan.yaml. This workflow:
 #   1. verifies the branch against its plan (a hand edit, patch or hidden change fails the build); glue is classified
 #      (resolution-only vs new code) in the log
-#   2. builds and pushes ghcr.io/<image-name>:<branch>-<sha7> through docker-build-push.yml (Buildx, Trivy, cache)
+#   2. reads the plan's `builds:` and runs each one, by kind:
+#        docker    -> ghcr.io/<image>:<branch>-<sha7> through docker-build-push.yml (Buildx, Trivy, cache)
+#        artifact  -> a shell command on a GitHub-hosted runner whose output files (an SDK's AAR or APK, an XCFramework, a package)
+#                     are uploaded as a workflow artifact with their sha256 in the job summary
+#      A plan without `builds:` builds one image from the inputs below (the original behaviour).
 #   (Cross-reference comments on the participating PRs are a follow-up, deliberately not part of this version.)
 #
-# Images contain UNMERGED code: never `latest`, pin consumers by DIGEST, re-pin to a release when the PRs land.
+# Results contain UNMERGED code: never `latest`, pin consumers by DIGEST (images) or checksum (artifacts), re-pin to a release when
+# the changes land. An `artifact` build runs the plan's commands in the branch's own checkout with read-only permissions and no
+# secrets, on a hosted runner: the same trust as any workflow code pushed to that branch.
 #
 # Usage (see workflow-templates/integration.yml):
 #
@@ -22,16 +28,17 @@
 #         packages: write
 #         security-events: write
 #       with:
-#         image-name: sirosfoundation/integration/my-service
+#         image-name: sirosfoundation/integration/my-service   # only for a plan without `builds:`
 name: Build Integration Branch
 
 on:
   workflow_call:
     inputs:
       image-name:
-        description: 'GHCR image name without registry prefix (e.g. sirosfoundation/integration/vc-apigw)'
+        description: 'GHCR image name without registry prefix; used only when the plan has no `builds:` (e.g. sirosfoundation/integration/vc-apigw)'
         type: string
-        required: true
+        required: false
+        default: ''
       dockerfile:
         type: string
         required: false
@@ -41,12 +48,12 @@ on:
         required: false
         default: '.'
       build-args:
-        description: 'Docker build arguments (multiline KEY=VALUE)'
+        description: 'Docker build arguments (multiline KEY=VALUE); used only when the plan has no `builds:`'
         type: string
         required: false
         default: ''
       target:
-        description: 'Dockerfile build target'
+        description: 'Dockerfile build target; used only when the plan has no `builds:`'
         type: string
         required: false
         default: ''
@@ -62,6 +69,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      docker: ${{ steps.builds.outputs.docker }}
+      artifact: ${{ steps.builds.outputs.artifact }}
+      has_docker: ${{ steps.builds.outputs.has_docker }}
+      has_artifact: ${{ steps.builds.outputs.has_artifact }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -83,19 +94,123 @@ jobs:
           SLUG=$(echo "$REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')
           echo "tag=${SLUG}-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
-  build:
+      - name: What the plan builds
+        id: builds
+        uses: sirosfoundation/.github/actions/integration@main
+        with:
+          command: builds
+          args: --tip HEAD
+
+      - name: Matrices
+        env:
+          BUILDS: ${{ steps.builds.outputs.result }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          builds = json.loads(os.environ["BUILDS"])
+          docker, artifact = builds["docker"], builds["artifact"]
+          if not docker and not artifact and os.environ["IMAGE_NAME"]:
+              docker = [{"name": "default", "kind": "docker", "image": os.environ["IMAGE_NAME"]}]
+          for build in docker:                      # docker-build-push.yml takes the arguments as one multiline string
+              build["build_args_text"] = "\n".join(build.get("build_args") or [])
+          print("docker=" + json.dumps(docker))
+          print("artifact=" + json.dumps(artifact))
+          print("has_docker=" + str(bool(docker)).lower())
+          print("has_artifact=" + str(bool(artifact)).lower())
+          PY
+
+  docker:
     needs: verify
+    if: needs.verify.outputs.has_docker == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.verify.outputs.docker) }}
     permissions:
       contents: read
       packages: write
       security-events: write
     uses: sirosfoundation/.github/.github/workflows/docker-build-push.yml@main
     with:
-      image-name: ${{ inputs.image-name }}
-      dockerfile: ${{ inputs.dockerfile }}
-      context: ${{ inputs.context }}
-      build-args: ${{ inputs.build-args }}
-      target: ${{ inputs.target }}
-      platforms: ${{ inputs.platforms }}
+      image-name: ${{ matrix.build.image }}
+      dockerfile: ${{ matrix.build.dockerfile || inputs.dockerfile }}
+      context: ${{ matrix.build.context || inputs.context }}
+      build-args: ${{ matrix.build.build_args_text || inputs.build-args }}
+      target: ${{ matrix.build.target || inputs.target }}
+      platforms: ${{ matrix.build.platforms || inputs.platforms }}
       custom-ref: ${{ github.ref }}
       custom-tag: ${{ needs.verify.outputs.tag }}
+
+  artifact:
+    needs: verify
+    if: needs.verify.outputs.has_artifact == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.verify.outputs.artifact) }}
+    runs-on: ${{ matrix.build.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Environment of ${{ matrix.build.name }}
+        env:
+          BUILD_ENV: ${{ toJSON(matrix.build.env) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # the plan's env mapping, handed to the next step through GITHUB_ENV and never interpolated into a script
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, os, uuid
+          for key, value in json.loads(os.environ["BUILD_ENV"] or "{}").items():
+              marker = "EOF_" + uuid.uuid4().hex
+              print(f"{key}<<{marker}\n{value}\n{marker}")
+          PY
+
+      - name: Build ${{ matrix.build.name }}
+        env:
+          RUN_SCRIPT: ${{ matrix.build.run }}
+        shell: bash
+        run: bash -euo pipefail -c "$RUN_SCRIPT"
+
+      - name: Collect outputs and checksums
+        id: collect
+        env:
+          OUTPUTS: ${{ toJSON(matrix.build.outputs) }}
+          NAME: ${{ matrix.build.name }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, hashlib, json, os, pathlib
+          files = []
+          for pattern in json.loads(os.environ["OUTPUTS"]):
+              files += [f for f in glob.glob(pattern, recursive=True) if os.path.isfile(f)]
+          files = sorted(set(files))
+          if not files:
+              raise SystemExit("no file matches the build's outputs: " + os.environ["OUTPUTS"])
+          lines = [f"### {os.environ['NAME']} @ {os.environ['TAG']}", "", "| file | sha256 | bytes |", "|---|---|---|"]
+          sums = []
+          for f in files:
+              data = pathlib.Path(f).read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              sums.append(f"{digest}  {f}")
+              lines.append(f"| `{f}` | `{digest}` | {len(data)} |")
+          pathlib.Path("SHA256SUMS").write_text("\n".join(sums) + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n".join(lines) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("paths<<__PATHS__\n" + "\n".join(files + ["SHA256SUMS"]) + "\n__PATHS__\n")
+          PY
+
+      - name: Upload ${{ matrix.build.name }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.build.name }}-${{ needs.verify.outputs.tag }}
+          path: ${{ steps.collect.outputs.paths }}
+          if-no-files-found: error
+          retention-days: 30
