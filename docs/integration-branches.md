@@ -83,6 +83,14 @@ Cross-reference comments on the participating PRs are a planned follow-up; this 
 These images contain UNMERGED code. Never use `latest`; pin by **digest** (the build summary prints it); re-pin to a release when the PRs
 land. `report --json` gives each PR's state and whether its head moved since the build (the branch is then stale).
 
+## Worked examples
+
+`docs/examples/integration/` holds two real builds written as plans: the gdc **vc** build (merges of a fork's branches and of PRs from
+two other forks, two glue branches, six picked fix commits, docker builds with a verifier target and pinned ZK libraries) and the gdc
+**engine** build (a PR plus two local-only commits). Replayed offline with `--remotes` against local copies they reproduce the trees that were
+deployed exactly (`b2ae7283` and `efb043e3`). `verify` classifies the vc glue: `glue/850` is resolution-only (it deletes four files),
+`glue/866` is new code (one line that was merged by hand: a reviewer's attention goes there); and it lists the engine's picked commits.
+
 ## Test targets
 
 Where the concept is exercised first (one per kind of result, from small to hard):

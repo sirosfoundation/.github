@@ -51,7 +51,8 @@ PLAN = ".integration/plan.yaml"
 
 
 def git(path, *args, check=True, input=None):
-    out = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, input=input)
+    # errors="replace": a repository holds binary files (a gzip fixture, an image) and git prints them back; novelty is judged on text lines
+    out = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, errors="replace", input=input)
     if check and out.returncode != 0:
         raise SystemExit(f"git {' '.join(args)}: {out.stderr.strip() or out.stdout.strip()}")
     return out
@@ -284,7 +285,9 @@ def replay(path, plan, resolve, branch, base_sha, commits_of=None):
                                  f"{merged.stdout.strip()[:300]}")
         entry = {"step": i, "kind": kind, "head": head, "tip_before": before}
         if kind == "glue":
-            entry["novel_lines"] = novel_lines(path, before, known_heads, base_sha)
+            # a source that already CONTAINS the glue (a later branch built on top of it) cannot vouch for the glue's own lines
+            vouching = [h for h in known_heads if git(path, "merge-base", "--is-ancestor", head, h, check=False).returncode != 0]
+            entry["novel_lines"] = novel_lines(path, before, vouching, base_sha)
         results.append(entry)
     return results
 
@@ -383,10 +386,10 @@ def verify(path, tip, url_for=ssh_url):
     path = Path(path)
     plan = read_plan(path, tip)
     if plan is None:
-        return {"ok": False, "problems": [f"no {PLAN} on {tip}: a branch is generated from a plan"], "glue": []}
+        return {"ok": False, "problems": [f"no {PLAN} on {tip}: a branch is generated from a plan"], "glue": [], "picks": []}
     locked = plan["locked"]
     tip_sha = git(path, "rev-parse", f"{tip}^{{commit}}").stdout.strip()
-    problems, glue = [], []
+    problems, glue, picks = [], [], []
     work = Path(tempfile.mkdtemp())
     git(path, "worktree", "add", "-q", "--detach", str(work), tip_sha)
     try:
@@ -407,6 +410,10 @@ def verify(path, tip, url_for=ssh_url):
             problems.append("the branch is not what its plan produces (a hand edit, a patch or a change hidden in a merge): "
                             f"{diff[0].strip()}")
         for r in results:
+            if r["kind"] == "pick":                 # listed so a reviewer sees which commits ride along without a PR of their own
+                step = plan["steps"][r["step"]]
+                picks.append({"step": r["step"], "source": step_label(step), "commits": [
+                    {"sha": c, "subject": git(work, "log", "-1", "--format=%s", c).stdout.strip()} for c in locked["steps"][r["step"]]["commits"]]})
             if r["kind"] == "glue":
                 step = plan["steps"][r["step"]]
                 glue.append({"step": r["step"], "branch": step_source(step)["ref"], "head": r["head"],
@@ -417,7 +424,7 @@ def verify(path, tip, url_for=ssh_url):
     finally:
         git(path, "worktree", "remove", "--force", str(work), check=False)
         git(path, "branch", "-D", "integration/verify-scratch", check=False)
-    return {"ok": not problems, "problems": problems, "glue": glue}
+    return {"ok": not problems, "problems": problems, "glue": glue, "picks": picks}
 
 
 # --- legacy (no plan): derive from history ------------------------------------------------------------------------------
@@ -532,6 +539,8 @@ def main(argv=None):
         for g in result["glue"]:
             print(f"glue {g['branch']}: {g['class']}" + (f" ({g['new_lines']} new lines in {', '.join(g['files'])})" if g["new_lines"] else ""),
                   file=sys.stderr)
+        for pk in result["picks"]:
+            print(f"pick {pk['source']}: " + "; ".join(f"{c['sha'][:9]} {c['subject'][:70]}" for c in pk["commits"]), file=sys.stderr)
         print("OK" if result["ok"] else "FAILED", file=sys.stderr)
         return 0 if result["ok"] else 1
     if args.command == "builds":

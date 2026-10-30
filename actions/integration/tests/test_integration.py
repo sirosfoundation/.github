@@ -269,6 +269,13 @@ class PlanV2(Case):
             self.sync([{"merge": "o/r#1"}, {"pick": {"from": "o/r:fix/logs", "commits": [c]}}])
         self.assertIn("glue step", str(cm.exception))
 
+    def test_verify_lists_the_picked_commits_for_review(self):
+        c1, c2 = self.remote.branch("fix/logs", [("one.txt", "1\n"), ("two.txt", "2\n")])
+        self.sync([{"pick": {"from": "o/r:fix/logs", "commits": [c1, c2]}}])
+        result = integration.verify(self.clone, "integration/x", self.url)
+        self.assertEqual([(p["source"], [c["sha"] for c in p["commits"]], [c["subject"] for c in p["commits"]]) for p in result["picks"]],
+                         [("o/r:fix/logs", [c1, c2], ["fix/logs: one.txt", "fix/logs: two.txt"])])
+
     def test_verify_replays_the_locked_commits_even_if_the_source_has_moved(self):
         c = self.remote.branch("fix/logs", [("one.txt", "1\n")])[0]
         self.sync([{"pick": {"from": "o/r:fix/logs", "commits": [c]}}])
@@ -292,6 +299,20 @@ class PlanV2(Case):
         self.assertTrue(result["ok"], result["problems"])
         self.assertEqual(result["glue"][0]["class"], "resolution-only", "'two' exists on the fix branch, a source of the plan")
         self.assertTrue(c)
+
+    def test_a_source_built_on_top_of_the_glue_cannot_vouch_for_its_lines(self):
+        """A pick source that descends from the glue branch contains every glue line: it must not make them 'known'."""
+        self.remote.pr(1, "a.txt", "one\n")
+        self.remote.pr(2, "a.txt", "two\n")
+        self.remote.glue("glue/1-2", [1, 2], {"a.txt": "one\ntwo\nbrand new behaviour\n"})
+        self.remote.git("checkout", "-q", "-B", "fix/later", "glue/1-2")
+        self.remote.write("later.txt", "later\n")
+        c = self.remote.commit("later work on top of the glue")
+        self.remote.git("checkout", "-q", "main")
+        self.sync([{"merge": "o/r#1"}, {"glue": "o/r:glue/1-2"}, {"merge": "o/r#2"}, {"pick": {"from": "o/r:fix/later", "commits": [c]}}])
+        result = integration.verify(self.clone, "integration/x", self.url)
+        self.assertTrue(result["ok"], result["problems"])
+        self.assertEqual((result["glue"][0]["class"], result["glue"][0]["new_lines"]), ("new code", 1))
 
     def test_a_version_1_plan_refuses_the_new_features(self):
         for step in ({"pick": {"from": "o/r:b", "commits": ["abc1234"]}}, {"merge": "o/r:fork/feature"}):
