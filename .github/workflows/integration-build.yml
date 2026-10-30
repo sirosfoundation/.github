@@ -95,15 +95,16 @@ jobs:
           echo "tag=${SLUG}-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: What the plan builds
-        id: builds
+        id: plan_builds
         uses: sirosfoundation/.github/actions/integration@main
         with:
           command: builds
           args: --tip HEAD
 
       - name: Matrices
+        id: builds
         env:
-          BUILDS: ${{ steps.builds.outputs.result }}
+          BUILDS: ${{ steps.plan_builds.outputs.result }}
           IMAGE_NAME: ${{ inputs.image-name }}
         run: |
           set -euo pipefail
