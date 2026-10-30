@@ -5,3 +5,7 @@ This repository contains organization-wide GitHub configuration files that are u
 ## Changes to this repo
 
 Since changes here show up across every repo (unless they've set up their own templates), any changes here should be **well discussed and approved** before merging. 
+
+## Integration branches
+
+Testing several unmerged PRs together? See [docs/integration-branches.md](docs/integration-branches.md): plan-generated `integration/**` branches, verified, built to GHCR, with a cross-reference comment on every participating PR.

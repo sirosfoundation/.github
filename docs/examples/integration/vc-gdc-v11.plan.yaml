@@ -1,0 +1,19 @@
+# The gdc vc build of 2026-10-28 (local branch gdc-nymauth-v11, tree b2ae7283), expressed as a plan. Replayed offline against local
+# copies of the repositories it reproduces that tree exactly. glue/866 is classified 'new code (1 line)': the one line merged by hand.
+# The branches named here (glue/*, gdc/fixes) were local; a real run needs them pushed to a fork of ours.
+version: 2
+base: {repo: sirosfoundation/vc, ref: 5e26c93b6b9abf5f89a103ffd53b08349b482072}
+steps:
+  - merge: sirosfoundation/vc:docs/nymauth-verifier-operator@09700653d
+  - merge: sirosfoundation/vc:feat/preauth-offer-for-login-gated-scopes@952426dc5
+  - glue: {branch: "sirosfoundation/vc:glue/850-onto-stack", note: "#850 deletes four files the stack still touches: take the deletions"}
+  - merge: SUNET/vc#850@1c6e0aab4
+  - merge: Wicpar/vc#1@edc191830
+  - glue: {branch: "sirosfoundation/vc:glue/866-onto-stack", note: "#866 against the v7 restructure of the presentation scope"}
+  - merge: SUNET/vc#866@9fb22dc72
+  - pick:
+      from: sirosfoundation/vc:gdc/fixes
+      commits: [8fedc0d58, 34180a8e0, 3d00fadf1, 8c79db245, 0e528401f, 3b886d16d]
+builds:
+  - {name: apigw, kind: docker, image: sirosfoundation/integration/vc-apigw, build_args: [SERVICE_NAME=apigw]}
+  - {name: verifier, kind: docker, image: sirosfoundation/integration/vc-verifier, target: runtime-verifier, build_args: [SERVICE_NAME=verifier, "ZK_CRED_LONGFELLOW_REF=58de20f07487bbb6ebe32148feec3bef4d92677e", "ZK_CRED_VEGA_REF=8e7be172e9010e8b47f3192f046d5f990f602790"], dockerfile: dockerfiles/worker}

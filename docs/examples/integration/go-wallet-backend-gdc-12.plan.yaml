@@ -1,0 +1,11 @@
+# The gdc engine build of 2026-10-28 (integration-12, tree efb043e3), expressed as a plan: replayed offline it reproduces that tree exactly.
+# The pick lists the two local-only commits (they have no PR): verify prints them so a reviewer sees what rides along.
+version: 2
+base: {repo: sirosfoundation/go-wallet-backend, ref: c86c663fc8b7d57911bf311bbc15092cfc076879}
+steps:
+  - merge: sirosfoundation/go-wallet-backend#480@d406ea3e95598eb5f53910b78466bf2229608630
+  - pick:
+      from: sirosfoundation/go-wallet-backend:gdc/local-integration-12
+      commits: [50ce4d50, d7d11ac4]
+builds:
+  - {name: engine, kind: docker, image: sirosfoundation/integration/go-wallet-backend, dockerfile: ./Dockerfile}

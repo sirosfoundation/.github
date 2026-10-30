@@ -1,0 +1,54 @@
+name: integration
+description: >
+  Integration branches ("bags of PRs"): sync, verify, report and comment. An integration/<name> branch is generated from
+  .integration/plan.yaml; verify proves nothing else is on it. See docs/integration-branches.md in sirosfoundation/.github.
+
+inputs:
+  command:
+    description: 'sync | verify | report | comment'
+    required: true
+  args:
+    description: 'Further arguments for integration.py (e.g. "--tip HEAD --summary")'
+    required: false
+    default: ''
+  path:
+    description: 'A clone of the repository holding the integration branch'
+    required: false
+    default: '.'
+  token:
+    description: 'GitHub token for the API (PR metadata, comments)'
+    required: false
+    default: ''
+
+outputs:
+  result:
+    description: 'stdout of the command'
+    value: ${{ steps.run.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install PyYAML
+      shell: bash
+      run: python3 -m pip install --quiet pyyaml
+
+    - name: integration.py
+      id: run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        COMMAND: ${{ inputs.command }}
+        ARGS: ${{ inputs.args }}
+        REPO_PATH: ${{ inputs.path }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        # ARGS is split on whitespace on purpose (no quoting inside values); it comes from the calling workflow, not from users.
+        # shellcheck disable=SC2086
+        OUT=$(python3 "$ACTION_PATH/integration.py" "$COMMAND" --path "$REPO_PATH" --https $ARGS)
+        {
+          echo "result<<__INTEGRATION_EOF__"
+          echo "$OUT"
+          echo "__INTEGRATION_EOF__"
+        } >> "$GITHUB_OUTPUT"
+        echo "$OUT"
