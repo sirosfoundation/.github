@@ -126,10 +126,19 @@ jobs:
 
       - name: Sign Source SBOM
         if: inputs.sign-sbom && steps.sbom.outcome == 'success'
+        # Cosign v3's sign-blob always writes a signing bundle; the legacy
+        # --output-signature/--output-certificate pair resolves an empty
+        # bundle path and fails ("create bundle file: open : no such file
+        # or directory"). The v3 flag is --bundle (the v2 --output-bundle
+        # name no longer exists). The bundle carries the signature, the
+        # certificate and the signed payload — verify with:
+        #   cosign verify-blob --bundle <name>-sbom.cdx.json.bundle \
+        #     --certificate-identity-regexp '^https://github.com/...' \
+        #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        #     <name>-sbom.cdx.json
         run: |
           cosign sign-blob --yes \
-            --output-signature ${{ steps.name.outputs.name }}-sbom.cdx.json.sig \
-            --output-certificate ${{ steps.name.outputs.name }}-sbom.cdx.json.pem \
+            --bundle ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle \
             ${{ steps.name.outputs.name }}-sbom.cdx.json
 
       - name: Upload SBOM artifact
@@ -138,8 +147,7 @@ jobs:
           name: ${{ steps.name.outputs.name }}-sbom
           path: |
             ${{ steps.name.outputs.name }}-sbom.cdx.json
-            ${{ steps.name.outputs.name }}-sbom.cdx.json.sig
-            ${{ steps.name.outputs.name }}-sbom.cdx.json.pem
+            ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle
             ${{ steps.name.outputs.name }}-container-sbom.cdx.json
           if-no-files-found: ignore
 
@@ -149,8 +157,7 @@ jobs:
         with:
           files: |
             ${{ steps.name.outputs.name }}-sbom.cdx.json
-            ${{ steps.name.outputs.name }}-sbom.cdx.json.sig
-            ${{ steps.name.outputs.name }}-sbom.cdx.json.pem
+            ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle
             ${{ steps.name.outputs.name }}-container-sbom.cdx.json
 
       - name: SBOM Summary
@@ -178,6 +185,6 @@ jobs:
             fi
             echo "   - [View results in Security tab](../security/code-scanning)" >> $GITHUB_STEP_SUMMARY
           fi
-          if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json.sig" ]]; then
-            echo "✅ **Signature**: Cosign keyless" >> $GITHUB_STEP_SUMMARY
+          if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json.bundle" ]]; then
+            echo "✅ **Signature**: Cosign keyless bundle (${{ steps.name.outputs.name }}-sbom.cdx.json.bundle)" >> $GITHUB_STEP_SUMMARY
           fi
