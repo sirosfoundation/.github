@@ -141,6 +141,17 @@ jobs:
             --bundle ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle \
             ${{ steps.name.outputs.name }}-sbom.cdx.json
 
+      - name: Sign Container SBOM
+        if: inputs.sign-sbom && inputs.scan-image != '' && steps.container-sbom.outcome == 'success'
+        # Same v3 bundle signing as the source SBOM, for the image SBOM a
+        # scan-image caller generates. Callers that promise signed source
+        # AND image SBOMs (release processes that pin this workflow) get
+        # both; callers without scan-image are untouched.
+        run: |
+          cosign sign-blob --yes \
+            --bundle ${{ steps.name.outputs.name }}-container-sbom.cdx.json.bundle \
+            ${{ steps.name.outputs.name }}-container-sbom.cdx.json
+
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v7
         with:
@@ -149,6 +160,7 @@ jobs:
             ${{ steps.name.outputs.name }}-sbom.cdx.json
             ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle
             ${{ steps.name.outputs.name }}-container-sbom.cdx.json
+            ${{ steps.name.outputs.name }}-container-sbom.cdx.json.bundle
           if-no-files-found: ignore
 
       - name: Attach SBOM to Release
@@ -159,6 +171,7 @@ jobs:
             ${{ steps.name.outputs.name }}-sbom.cdx.json
             ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle
             ${{ steps.name.outputs.name }}-container-sbom.cdx.json
+            ${{ steps.name.outputs.name }}-container-sbom.cdx.json.bundle
 
       - name: SBOM Summary
         if: always()
@@ -187,4 +200,7 @@ jobs:
           fi
           if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json.bundle" ]]; then
             echo "✅ **Signature**: Cosign keyless bundle (${{ steps.name.outputs.name }}-sbom.cdx.json.bundle)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [[ -f "${{ steps.name.outputs.name }}-container-sbom.cdx.json.bundle" ]]; then
+            echo "✅ **Container signature**: Cosign keyless bundle (${{ steps.name.outputs.name }}-container-sbom.cdx.json.bundle)" >> $GITHUB_STEP_SUMMARY
           fi
