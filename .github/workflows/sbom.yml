@@ -185,6 +185,6 @@ jobs:
             fi
             echo "   - [View results in Security tab](../security/code-scanning)" >> $GITHUB_STEP_SUMMARY
           fi
-          if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json.sig" ]]; then
-            echo "✅ **Signature**: Cosign keyless" >> $GITHUB_STEP_SUMMARY
+          if [[ -f "${{ steps.name.outputs.name }}-sbom.cdx.json.bundle" ]]; then
+            echo "✅ **Signature**: Cosign keyless bundle (${{ steps.name.outputs.name }}-sbom.cdx.json.bundle)" >> $GITHUB_STEP_SUMMARY
           fi
