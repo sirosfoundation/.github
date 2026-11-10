@@ -129,15 +129,16 @@ jobs:
         # Cosign v3's sign-blob always writes a signing bundle; the legacy
         # --output-signature/--output-certificate pair resolves an empty
         # bundle path and fails ("create bundle file: open : no such file
-        # or directory"). The bundle carries the signature, the certificate
-        # and the signed payload — verify with:
+        # or directory"). The v3 flag is --bundle (the v2 --output-bundle
+        # name no longer exists). The bundle carries the signature, the
+        # certificate and the signed payload — verify with:
         #   cosign verify-blob --bundle <name>-sbom.cdx.json.bundle \
         #     --certificate-identity-regexp '^https://github.com/...' \
         #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
         #     <name>-sbom.cdx.json
         run: |
           cosign sign-blob --yes \
-            --output-bundle ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle \
+            --bundle ${{ steps.name.outputs.name }}-sbom.cdx.json.bundle \
             ${{ steps.name.outputs.name }}-sbom.cdx.json
 
       - name: Upload SBOM artifact
