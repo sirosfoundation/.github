@@ -91,6 +91,14 @@ jobs:
         with:
           format: cyclonedx-json
           output-file: ${{ steps.name.outputs.name }}-sbom.cdx.json
+          # The action's internal release attach (its default) downloads the
+          # artifact it uploaded seconds earlier - a read-after-write race
+          # against GitHub's artifact API that failed the siros-verifier-core
+          # v0.1.3 release three times (and reruns poison it further: the
+          # duplicate-named artifacts 404 deterministically). The workflow's
+          # own "Attach SBOM to Release" step attaches the local signed files
+          # with no artifact round-trip, so the racy internal path is off.
+          upload-release-assets: false
         continue-on-error: ${{ !inputs.require-sbom }}
 
       - name: Generate Container SBOM
@@ -101,6 +109,7 @@ jobs:
           image: ${{ inputs.scan-image }}
           format: cyclonedx-json
           output-file: ${{ steps.name.outputs.name }}-container-sbom.cdx.json
+          upload-release-assets: false
         continue-on-error: ${{ !inputs.require-sbom }}
 
       - name: Scan SBOM for vulnerabilities
